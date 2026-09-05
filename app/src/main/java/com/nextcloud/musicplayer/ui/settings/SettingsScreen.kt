@@ -1,5 +1,6 @@
 package com.nextcloud.musicplayer.ui.settings
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -23,6 +24,7 @@ fun SettingsScreen(
     onLogout: () -> Unit
 ) {
     val musicFolder by viewModel.musicFolder.collectAsState()
+    val albumNameLevels by viewModel.albumNameLevels.collectAsState()
     val cacheMaxBytes by viewModel.cacheMaxSizeBytes.collectAsState()
     val usedCacheBytes by viewModel.usedCacheBytes.collectAsState()
     val isSyncing by viewModel.isSyncing.collectAsState()
@@ -149,7 +151,75 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(28.dp))
 
-            // 2. 緩衝快取上限設定 (模組 4 & 5)
+            // 2. 專輯名稱顯示階層 (自訂資料夾階層 1..5)
+            Text(
+                text = "專輯名稱顯示階層",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("勾選欲包含於專輯名稱中的資料夾階層：", style = MaterialTheme.typography.labelMedium)
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    val levelOptions = listOf(
+                        1 to "階層 1（掃描根目錄）",
+                        2 to "階層 2（第一層子資料夾）",
+                        3 to "階層 3（第二層子資料夾）",
+                        4 to "階層 4（第三層子資料夾）",
+                        5 to "階層 5（第四層子資料夾）"
+                    )
+
+                    levelOptions.forEach { (level, label) ->
+                        val isChecked = albumNameLevels.contains(level)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    val newSet = if (isChecked) albumNameLevels - level else albumNameLevels + level
+                                    viewModel.updateAlbumNameLevels(newSet)
+                                }
+                                .padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(
+                                checked = isChecked,
+                                onCheckedChange = { checked ->
+                                    val newSet = if (checked) albumNameLevels + level else albumNameLevels - level
+                                    viewModel.updateAlbumNameLevels(newSet)
+                                }
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(text = label, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Text(
+                        text = "範例預覽：${viewModel.previewAlbumName(albumNameLevels)}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = "路徑以 /Music/Rock/Classic/Pink Floyd/The Wall 為例",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(28.dp))
+
+            // 3. 緩衝快取上限設定 (模組 4 & 5)
             Text(
                 text = "音訊串流快取管理",
                 style = MaterialTheme.typography.titleMedium,

@@ -67,7 +67,7 @@ class NextcloudMusicApp : Application(), ImageLoaderFactory {
         webDavClient = NextcloudWebDavClient(authenticatedOkHttpClient, securePreferencesManager)
         loginFlowClient = LoginFlowV2Client(authenticatedOkHttpClient)
         database = AppDatabase.getInstance(this)
-        musicRepository = MusicRepository(webDavClient, database, securePreferencesManager, this)
+        musicRepository = MusicRepository(webDavClient, database, securePreferencesManager, this, appSettingsDataStore)
 
         playbackCacheManager = PlaybackCacheManager.getInstance(
             this,

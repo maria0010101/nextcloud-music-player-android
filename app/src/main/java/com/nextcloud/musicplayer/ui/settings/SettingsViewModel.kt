@@ -26,6 +26,9 @@ class SettingsViewModel(
     val cacheMaxSizeBytes: StateFlow<Long> = settingsDataStore.cacheMaxSizeBytes
         .stateIn(viewModelScope, SharingStarted.Lazily, cacheManager.getMaxCacheSizeBytes())
 
+    val albumNameLevels: StateFlow<Set<Int>> = settingsDataStore.albumNameLevels
+        .stateIn(viewModelScope, SharingStarted.Lazily, AppSettingsDataStore.DEFAULT_ALBUM_NAME_LEVELS)
+
     private val _usedCacheBytes = MutableStateFlow(cacheManager.getCacheSizeBytes())
     val usedCacheBytes: StateFlow<Long> = _usedCacheBytes.asStateFlow()
 
@@ -66,6 +69,18 @@ class SettingsViewModel(
         }
     }
 
+    fun updateAlbumNameLevels(newLevels: Set<Int>) {
+        viewModelScope.launch {
+            settingsDataStore.saveAlbumNameLevels(newLevels)
+            repository.reapplyAlbumNameLevels(newLevels, musicFolder.value)
+        }
+    }
+
+    fun previewAlbumName(selectedLevels: Set<Int>): String {
+        val sampleLevels = listOf("Music", "Rock", "Classic", "Pink Floyd", "The Wall")
+        return MusicRepository.formatAlbumName(sampleLevels, selectedLevels, "The Wall")
+    }
+
     fun clearCache() {
         cacheManager.clearCache()
         refreshUsedCache()
@@ -80,6 +95,7 @@ class SettingsViewModel(
         viewModelScope.launch {
             val result = repository.scanMusicLibrary(
                 scopedFolder = target,
+                selectedLevels = albumNameLevels.value,
                 onProgress = { msg -> _syncMessage.value = msg }
             )
             _isSyncing.value = false

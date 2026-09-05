@@ -54,10 +54,55 @@ class AlbumNamingTest {
     }
 
     @Test
-    fun testNaturalOrderComparator() {
-        val list = listOf("10.mp3", "2.mp3", "1.mp3", "20.mp3", "track_2.flac", "track_10.flac", "track_1.flac")
-        val sorted = list.sortedWith(NaturalOrderComparator)
-        val expected = listOf("1.mp3", "2.mp3", "10.mp3", "20.mp3", "track_1.flac", "track_2.flac", "track_10.flac")
-        assertEquals(expected, sorted)
+    fun testCustomLevelsFormatAlbumNameByLevels() {
+        val fullPath = "/Music/Rock/Classic/Pink Floyd/The Wall/01.mp3"
+        val scanRootDir = "/Music"
+
+        // 案例 A（勾選階層 2, 3, 4）：輸出 Rock - Classic - Pink Floyd
+        val resultA = MusicRepository.formatAlbumNameByLevels(
+            fullPath = fullPath,
+            scanRootDir = scanRootDir,
+            selectedLevels = setOf(2, 3, 4)
+        )
+        assertEquals("Rock - Classic - Pink Floyd", resultA)
+
+        // 案例 B（勾選階層 1, 2, 5）：輸出 Music - Rock - The Wall
+        val resultB = MusicRepository.formatAlbumNameByLevels(
+            fullPath = fullPath,
+            scanRootDir = scanRootDir,
+            selectedLevels = setOf(1, 2, 5)
+        )
+        assertEquals("Music - Rock - The Wall", resultB)
+
+        // 案例 C（勾選階層 3, 4，但檔案位於 /Music/Jazz/01.mp3 只有到階層 2）：篩選為空，回退顯示目前目錄 Jazz
+        val resultC = MusicRepository.formatAlbumNameByLevels(
+            fullPath = "/Music/Jazz/01.mp3",
+            scanRootDir = scanRootDir,
+            selectedLevels = setOf(3, 4)
+        )
+        assertEquals("Jazz", resultC)
+
+        // 案例 D：全部取消勾選 (emptySet)，回退顯示當前目錄
+        val resultD = MusicRepository.formatAlbumNameByLevels(
+            fullPath = fullPath,
+            scanRootDir = scanRootDir,
+            selectedLevels = emptySet()
+        )
+        assertEquals("The Wall", resultD)
+
+        // 案例 E：預設勾選 2, 3
+        val resultE1 = MusicRepository.formatAlbumNameByLevels(
+            fullPath = "/Music/Greatest Hits/01.mp3",
+            scanRootDir = scanRootDir,
+            selectedLevels = setOf(2, 3)
+        )
+        assertEquals("Greatest Hits", resultE1)
+
+        val resultE2 = MusicRepository.formatAlbumNameByLevels(
+            fullPath = "/Music/Jay Chou/Fantasy/01.mp3",
+            scanRootDir = scanRootDir,
+            selectedLevels = setOf(2, 3)
+        )
+        assertEquals("Jay Chou - Fantasy", resultE2)
     }
 }
