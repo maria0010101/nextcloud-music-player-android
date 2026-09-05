@@ -67,8 +67,9 @@ dependencies {
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
 
-    // Security (EncryptedSharedPreferences)
+    // Security & DataStore
     implementation(libs.androidx.security.crypto)
+    implementation(libs.androidx.datastore.preferences)
 
     // OkHttp & Gson
     implementation(libs.okhttp)

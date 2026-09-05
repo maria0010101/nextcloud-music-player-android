@@ -9,7 +9,6 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -22,56 +21,19 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.nextcloud.musicplayer.data.local.entity.AlbumEntity
-import com.nextcloud.musicplayer.ui.folder.FolderPickerDialog
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AlbumListScreen(
     viewModel: AlbumListViewModel,
     onAlbumClick: (albumId: String) -> Unit,
-    onLogout: () -> Unit
+    onOpenSettings: () -> Unit
 ) {
     val albums by viewModel.filteredAlbums.collectAsState()
     val isGridMode by viewModel.isGridMode.collectAsState()
     val isSyncing by viewModel.isSyncing.collectAsState()
     val syncMessage by viewModel.syncMessage.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
-    val selectedFolder by viewModel.selectedFolder.collectAsState()
-
-    var showLogoutDialog by remember { mutableStateOf(false) }
-    var showFolderPicker by remember { mutableStateOf(false) }
-
-    if (showFolderPicker) {
-        FolderPickerDialog(
-            initialFolder = selectedFolder,
-            repository = viewModel.repository,
-            onFolderSelected = { chosenFolder ->
-                viewModel.updateSelectedFolder(chosenFolder)
-            },
-            onDismiss = { showFolderPicker = false }
-        )
-    }
-
-    if (showLogoutDialog) {
-        AlertDialog(
-            onDismissRequest = { showLogoutDialog = false },
-            title = { Text("登出帳號") },
-            text = { Text("確定要登出並清除本機 Nextcloud 連線設定嗎？") },
-            confirmButton = {
-                TextButton(onClick = {
-                    showLogoutDialog = false
-                    viewModel.logout(onLogout)
-                }) {
-                    Text("確定登出", color = MaterialTheme.colorScheme.error)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showLogoutDialog = false }) {
-                    Text("取消")
-                }
-            }
-        )
-    }
 
     Scaffold(
         topBar = {
@@ -92,10 +54,6 @@ fun AlbumListScreen(
                         }
                     }
 
-                    IconButton(onClick = { showFolderPicker = true }) {
-                        Icon(Icons.Default.CreateNewFolder, contentDescription = "指定音樂資料夾")
-                    }
-
                     IconButton(onClick = { viewModel.toggleGridMode() }) {
                         Icon(
                             if (isGridMode) Icons.AutoMirrored.Filled.ViewList else Icons.Default.GridView,
@@ -103,8 +61,9 @@ fun AlbumListScreen(
                         )
                     }
 
-                    IconButton(onClick = { showLogoutDialog = true }) {
-                        Icon(Icons.AutoMirrored.Filled.ExitToApp, contentDescription = "登出")
+                    // 模組 4：齒輪設定按鈕
+                    IconButton(onClick = onOpenSettings) {
+                        Icon(Icons.Default.Settings, contentDescription = "設定")
                     }
                 }
             )
@@ -115,46 +74,11 @@ fun AlbumListScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
-            // Selected Folder Banner
-            Surface(
-                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { showFolderPicker = true }
-                    .padding(horizontal = 16.dp, vertical = 6.dp),
-                shape = RoundedCornerShape(8.dp)
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.FolderOpen,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    val displayFolder = if (selectedFolder.isEmpty()) "根目錄 (/)" else "/$selectedFolder"
-                    Text(
-                        text = "掃描目錄: $displayFolder",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Text(
-                        text = "變更",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
-            }
-
             // Search Bar
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { viewModel.setSearchQuery(it) },
-                placeholder = { Text("搜尋專輯或資料夾...") },
+                placeholder = { Text("搜尋專輯或歌手...") },
                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                 trailingIcon = {
                     if (searchQuery.isNotEmpty()) {
@@ -166,7 +90,7 @@ fun AlbumListScreen(
                 singleLine = true,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 6.dp)
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
             )
 
             // Sync status banner
@@ -212,31 +136,20 @@ fun AlbumListScreen(
                         )
                         Spacer(modifier = Modifier.height(16.dp))
                         Text(
-                            text = if (searchQuery.isNotEmpty()) "查無相關專輯" else "目前目錄未發現音樂",
+                            text = if (searchQuery.isNotEmpty()) "查無相關專輯" else "目前音樂庫為空",
                             style = MaterialTheme.typography.titleMedium
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = "可點擊上方「變更」按鈕選定包含音樂檔案的 Nextcloud 目錄 (例如 /Music)，再執行掃描",
+                            text = "請前往「設定」挑選 Nextcloud 上的音樂專用目錄並執行掃描",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Spacer(modifier = Modifier.height(16.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Button(onClick = { showFolderPicker = true }) {
-                                Icon(Icons.Default.Folder, contentDescription = null)
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("選擇資料夾")
-                            }
-
-                            OutlinedButton(
-                                onClick = { viewModel.syncLibrary() },
-                                enabled = !isSyncing
-                            ) {
-                                Icon(Icons.Default.Sync, contentDescription = null)
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("立即掃描")
-                            }
+                        Button(onClick = onOpenSettings) {
+                            Icon(Icons.Default.Settings, contentDescription = null)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("前往設定頁面")
                         }
                     }
                 }

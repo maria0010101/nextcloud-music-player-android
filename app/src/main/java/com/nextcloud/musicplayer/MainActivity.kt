@@ -27,7 +27,8 @@ import com.nextcloud.musicplayer.ui.detail.AlbumDetailScreen
 import com.nextcloud.musicplayer.ui.detail.AlbumDetailViewModel
 import com.nextcloud.musicplayer.ui.player.MiniPlayerBar
 import com.nextcloud.musicplayer.ui.player.PlayerScreen
-import com.nextcloud.musicplayer.ui.scan.QrScannerScreen
+import com.nextcloud.musicplayer.ui.settings.SettingsScreen
+import com.nextcloud.musicplayer.ui.settings.SettingsViewModel
 import com.nextcloud.musicplayer.ui.theme.NextcloudMusicTheme
 import java.net.URLDecoder
 import java.net.URLEncoder
@@ -53,10 +54,10 @@ class MainActivity : ComponentActivity() {
 
         val app = application as NextcloudMusicApp
         val prefs = app.securePreferencesManager
-        val webDavClient = app.webDavClient
         val loginFlowClient = app.loginFlowClient
-        val qrLoginManager = app.qrLoginManager
         val repository = app.musicRepository
+        val cacheManager = app.playbackCacheManager
+        val settingsDataStore = app.appSettingsDataStore
         val playerController = app.playerController
 
         setContent {
@@ -100,9 +101,10 @@ class MainActivity : ComponentActivity() {
                             startDestination = startDestination,
                             modifier = Modifier.padding(innerPadding)
                         ) {
+                            // 模組 1：精簡登入 (僅保留 Nextcloud 官方 Login Flow v2)
                             composable("login") {
                                 val loginViewModel = remember {
-                                    LoginViewModel(prefs, webDavClient, loginFlowClient, qrLoginManager)
+                                    LoginViewModel(prefs, loginFlowClient)
                                 }
                                 LoginScreen(
                                     viewModel = loginViewModel,
@@ -110,23 +112,7 @@ class MainActivity : ComponentActivity() {
                                         navController.navigate("albums") {
                                             popUpTo("login") { inclusive = true }
                                         }
-                                    },
-                                    onOpenQrScanner = {
-                                        navController.navigate("qr_scanner")
                                     }
-                                )
-                            }
-
-                            composable("qr_scanner") {
-                                val loginViewModel = remember {
-                                    LoginViewModel(prefs, webDavClient, loginFlowClient, qrLoginManager)
-                                }
-                                QrScannerScreen(
-                                    onQrCodeDetected = { scannedText ->
-                                        loginViewModel.handleScannedQrCode(scannedText, this@MainActivity)
-                                        navController.popBackStack()
-                                    },
-                                    onBack = { navController.popBackStack() }
                                 )
                             }
 
@@ -140,10 +126,8 @@ class MainActivity : ComponentActivity() {
                                         val encoded = URLEncoder.encode(albumId, "UTF-8")
                                         navController.navigate("album_detail/$encoded")
                                     },
-                                    onLogout = {
-                                        navController.navigate("login") {
-                                            popUpTo("albums") { inclusive = true }
-                                        }
+                                    onOpenSettings = {
+                                        navController.navigate("settings")
                                     }
                                 )
                             }
@@ -162,10 +146,26 @@ class MainActivity : ComponentActivity() {
                                     onBack = { navController.popBackStack() }
                                 )
                             }
+
+                            // 模組 4：獨立設定畫面 (SettingsScreen)
+                            composable("settings") {
+                                val settingsViewModel = remember {
+                                    SettingsViewModel(repository, prefs, settingsDataStore, cacheManager)
+                                }
+                                SettingsScreen(
+                                    viewModel = settingsViewModel,
+                                    onBack = { navController.popBackStack() },
+                                    onLogout = {
+                                        navController.navigate("login") {
+                                            popUpTo("albums") { inclusive = true }
+                                        }
+                                    }
+                                )
+                            }
                         }
                     }
 
-                    // 模組 2：滑出式全螢幕播放視窗 (Bottom Sheet)
+                    // 模組 2 & 3：滑出式全螢幕播放視窗 (Bottom Sheet)
                     if (isPlayerSheetVisible) {
                         ModalBottomSheet(
                             onDismissRequest = { isPlayerSheetVisible = false },

@@ -6,9 +6,9 @@ import coil.ImageLoaderFactory
 import coil.disk.DiskCache
 import coil.memory.MemoryCache
 import com.nextcloud.musicplayer.core.network.BasicAuthInterceptor
-import com.nextcloud.musicplayer.core.network.NextcloudQrLoginManager
 import com.nextcloud.musicplayer.core.network.NextcloudWebDavClient
 import com.nextcloud.musicplayer.core.security.SecurePreferencesManager
+import com.nextcloud.musicplayer.core.settings.AppSettingsDataStore
 import com.nextcloud.musicplayer.data.auth.LoginFlowV2Client
 import com.nextcloud.musicplayer.data.local.AppDatabase
 import com.nextcloud.musicplayer.data.repository.MusicRepository
@@ -23,6 +23,9 @@ class NextcloudMusicApp : Application(), ImageLoaderFactory {
     lateinit var securePreferencesManager: SecurePreferencesManager
         private set
 
+    lateinit var appSettingsDataStore: AppSettingsDataStore
+        private set
+
     lateinit var authenticatedOkHttpClient: OkHttpClient
         private set
 
@@ -30,9 +33,6 @@ class NextcloudMusicApp : Application(), ImageLoaderFactory {
         private set
 
     lateinit var loginFlowClient: LoginFlowV2Client
-        private set
-
-    lateinit var qrLoginManager: NextcloudQrLoginManager
         private set
 
     lateinit var database: AppDatabase
@@ -51,6 +51,7 @@ class NextcloudMusicApp : Application(), ImageLoaderFactory {
         super.onCreate()
 
         securePreferencesManager = SecurePreferencesManager(this)
+        appSettingsDataStore = AppSettingsDataStore(this)
 
         val logging = HttpLoggingInterceptor().apply {
             level = HttpLoggingInterceptor.Level.BASIC
@@ -65,14 +66,14 @@ class NextcloudMusicApp : Application(), ImageLoaderFactory {
 
         webDavClient = NextcloudWebDavClient(authenticatedOkHttpClient, securePreferencesManager)
         loginFlowClient = LoginFlowV2Client(authenticatedOkHttpClient)
-        qrLoginManager = NextcloudQrLoginManager(webDavClient, loginFlowClient, securePreferencesManager)
         database = AppDatabase.getInstance(this)
         musicRepository = MusicRepository(webDavClient, database, securePreferencesManager, this)
 
         playbackCacheManager = PlaybackCacheManager.getInstance(
             this,
             authenticatedOkHttpClient,
-            securePreferencesManager
+            securePreferencesManager,
+            appSettingsDataStore
         )
 
         playerController = PlayerController(this, musicRepository)

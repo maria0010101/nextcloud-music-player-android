@@ -4,10 +4,13 @@ import android.content.ComponentName
 import android.content.Context
 import android.net.Uri
 import android.util.Log
+import androidx.media3.common.C
+import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.Tracks
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
@@ -23,6 +26,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.util.Locale
 
 class PlayerController(
     private val context: Context,
@@ -48,6 +52,9 @@ class PlayerController(
 
     private val _durationMs = MutableStateFlow(0L)
     val durationMs: StateFlow<Long> = _durationMs.asStateFlow()
+
+    private val _audioSpecs = MutableStateFlow("")
+    val audioSpecs: StateFlow<String> = _audioSpecs.asStateFlow()
 
     private val _shuffleModeEnabled = MutableStateFlow(false)
     val shuffleModeEnabled: StateFlow<Boolean> = _shuffleModeEnabled.asStateFlow()
@@ -98,15 +105,18 @@ class PlayerController(
                 }
             }
 
+            override fun onTracksChanged(tracks: Tracks) {
+                updateAudioSpecs(player)
+            }
+
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 updateCurrentTrack(player)
+                updateAudioSpecs(player)
             }
 
             override fun onPlaybackStateChanged(state: Int) {
                 when (state) {
-                    Player.STATE_IDLE -> {
-                        _playbackState.value = PlaybackState.Idle
-                    }
+                    Player.STATE_IDLE -> _playbackState.value = PlaybackState.Idle
                     Player.STATE_BUFFERING -> {
                         _playbackState.value = PlaybackState.Buffering("檔案緩衝暫存中，請稍候...")
                         Log.d(TAG, "ExoPlayer 狀態: 檔案緩衝暫存中...")
@@ -117,15 +127,12 @@ class PlayerController(
                         if (realDuration > 0L) {
                             _durationMs.value = realDuration
                             _currentTrack.value?.let { track ->
-                                scope.launch {
-                                    musicRepository?.updateTrackDuration(track.id, realDuration)
-                                }
+                                scope.launch { musicRepository?.updateTrackDuration(track.id, realDuration) }
                             }
                         }
+                        updateAudioSpecs(player)
                     }
-                    Player.STATE_ENDED -> {
-                        _playbackState.value = PlaybackState.Ended
-                    }
+                    Player.STATE_ENDED -> _playbackState.value = PlaybackState.Ended
                 }
                 updateStateFromPlayer(player)
             }
@@ -158,6 +165,48 @@ class PlayerController(
                 _repeatMode.value = repeatMode
             }
         })
+    }
+
+    /**
+     * 模組 3：即時解析音訊規格中繼資料 (取樣率與位元率)
+     */
+    private fun updateAudioSpecs(player: Player) {
+        val audioGroup = player.currentTracks.groups.firstOrNull { it.type == C.TRACK_TYPE_AUDIO && it.isSelected }
+            ?: player.currentTracks.groups.firstOrNull { it.type == C.TRACK_TYPE_AUDIO }
+        val format: Format? = (0 until (audioGroup?.length ?: 0))
+            .mapNotNull { audioGroup?.getTrackFormat(it) }
+            .firstOrNull()
+
+        val fallbackFormat = _currentTrack.value?.format ?: "AUDIO"
+
+        if (format != null) {
+            val sampleRate = format.sampleRate
+            val bitrate = format.bitrate
+
+            val sampleRateStr = when {
+                sampleRate >= 1000 && sampleRate % 1000 == 0 -> "${sampleRate / 1000}kHz"
+                sampleRate >= 1000 -> String.format(Locale.US, "%.1fkHz", sampleRate / 1000f)
+                sampleRate > 0 -> "${sampleRate}Hz"
+                else -> null
+            }
+
+            val bitrateStr = when {
+                bitrate >= 1000 -> "${bitrate / 1000}kbps"
+                bitrate > 0 -> "${bitrate}bps"
+                else -> null
+            }
+
+            val result = when {
+                sampleRateStr != null && bitrateStr != null -> "$sampleRateStr · $bitrateStr"
+                sampleRateStr != null -> "$sampleRateStr · $fallbackFormat"
+                bitrateStr != null -> "$bitrateStr · $fallbackFormat"
+                else -> fallbackFormat
+            }
+            _audioSpecs.value = result
+            Log.d(TAG, "動態音訊規格: $result (sampleRate=$sampleRate, bitrate=$bitrate)")
+        } else {
+            _audioSpecs.value = fallbackFormat
+        }
     }
 
     private fun updateStateFromPlayer(player: Player) {
@@ -217,7 +266,6 @@ class PlayerController(
 
         currentPlaylist = tracks
         val mediaItems = tracks.map { track ->
-            // 優先使用可離線播放的本地 file:// URI，若未下載則使用 Nextcloud 串流 URL
             val playbackUrl = track.playableUri
             val playUri = Uri.parse(playbackUrl)
             val effectiveCover = track.coverUrl ?: coverUrl

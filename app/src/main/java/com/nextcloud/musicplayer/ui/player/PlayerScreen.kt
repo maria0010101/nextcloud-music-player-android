@@ -31,6 +31,7 @@ fun PlayerScreen(
     val currentTrack by playerController.currentTrack.collectAsState()
     val isPlaying by playerController.isPlaying.collectAsState()
     val playbackState by playerController.playbackState.collectAsState()
+    val audioSpecs by playerController.audioSpecs.collectAsState()
     val positionMs by playerController.currentPositionMs.collectAsState()
     val durationMs by playerController.durationMs.collectAsState()
     val shuffleEnabled by playerController.shuffleModeEnabled.collectAsState()
@@ -125,7 +126,7 @@ fun PlayerScreen(
                     }
                 }
 
-                // 2. 錯誤狀態或曲目資訊顯示
+                // 2. 錯誤狀態或曲目規格資訊 (模組 3：即時取樣率與位元率中繼資料，移除 1GB 說明文字)
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
                         text = track.title,
@@ -164,23 +165,20 @@ fun PlayerScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
+                            // 動態即時音訊規格 (例如：44.1kHz · 320kbps 或 96kHz · 1024kbps)
+                            val displaySpecs = audioSpecs.ifBlank { track.format }
                             SuggestionChip(
                                 onClick = {},
-                                label = { Text(track.format) }
+                                label = { Text(displaySpecs) }
                             )
 
                             if (track.isDownloaded) {
                                 SuggestionChip(
                                     onClick = {},
-                                    label = { Text("已離線下載") },
+                                    label = { Text("本機離線") },
                                     colors = SuggestionChipDefaults.suggestionChipColors(
                                         containerColor = MaterialTheme.colorScheme.secondaryContainer
                                     )
-                                )
-                            } else {
-                                SuggestionChip(
-                                    onClick = {},
-                                    label = { Text("1GB 邊播邊存") }
                                 )
                             }
                         }
