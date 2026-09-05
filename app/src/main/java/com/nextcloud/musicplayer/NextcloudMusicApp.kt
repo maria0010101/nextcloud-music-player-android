@@ -6,6 +6,7 @@ import coil.ImageLoaderFactory
 import coil.disk.DiskCache
 import coil.memory.MemoryCache
 import com.nextcloud.musicplayer.core.network.BasicAuthInterceptor
+import com.nextcloud.musicplayer.core.network.NextcloudQrLoginManager
 import com.nextcloud.musicplayer.core.network.NextcloudWebDavClient
 import com.nextcloud.musicplayer.core.security.SecurePreferencesManager
 import com.nextcloud.musicplayer.data.auth.LoginFlowV2Client
@@ -29,6 +30,9 @@ class NextcloudMusicApp : Application(), ImageLoaderFactory {
         private set
 
     lateinit var loginFlowClient: LoginFlowV2Client
+        private set
+
+    lateinit var qrLoginManager: NextcloudQrLoginManager
         private set
 
     lateinit var database: AppDatabase
@@ -61,8 +65,9 @@ class NextcloudMusicApp : Application(), ImageLoaderFactory {
 
         webDavClient = NextcloudWebDavClient(authenticatedOkHttpClient, securePreferencesManager)
         loginFlowClient = LoginFlowV2Client(authenticatedOkHttpClient)
+        qrLoginManager = NextcloudQrLoginManager(webDavClient, loginFlowClient, securePreferencesManager)
         database = AppDatabase.getInstance(this)
-        musicRepository = MusicRepository(webDavClient, database, securePreferencesManager)
+        musicRepository = MusicRepository(webDavClient, database, securePreferencesManager, this)
 
         playbackCacheManager = PlaybackCacheManager.getInstance(
             this,

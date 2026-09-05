@@ -37,6 +37,9 @@ class PlayerController(
     private val _isPlaying = MutableStateFlow(false)
     val isPlaying: StateFlow<Boolean> = _isPlaying.asStateFlow()
 
+    private val _playbackState = MutableStateFlow<PlaybackState>(PlaybackState.Idle)
+    val playbackState: StateFlow<PlaybackState> = _playbackState.asStateFlow()
+
     private val _currentTrack = MutableStateFlow<TrackEntity?>(null)
     val currentTrack: StateFlow<TrackEntity?> = _currentTrack.asStateFlow()
 
@@ -73,9 +76,9 @@ class PlayerController(
                 mediaController = controller
                 setupPlayerListener(controller)
                 updateStateFromPlayer(controller)
-                Log.d(TAG, "MediaController successfully connected")
+                Log.d(TAG, "MediaController 已成功連線")
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to connect MediaController", e)
+                Log.e(TAG, "MediaController 連線失敗", e)
             }
         }, MoreExecutors.directExecutor())
     }
@@ -85,8 +88,12 @@ class PlayerController(
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 _isPlaying.value = isPlaying
                 if (isPlaying) {
+                    _playbackState.value = PlaybackState.Playing
                     startProgressPolling()
                 } else {
+                    if (player.playbackState == Player.STATE_READY) {
+                        _playbackState.value = PlaybackState.Paused
+                    }
                     stopProgressPolling()
                 }
             }
@@ -95,37 +102,51 @@ class PlayerController(
                 updateCurrentTrack(player)
             }
 
-            override fun onPlaybackStateChanged(playbackState: Int) {
-                updateStateFromPlayer(player)
-
-                // 動態獲取音訊真實長度並寫入 Room 資料庫快取
-                if (playbackState == Player.STATE_READY || playbackState == Player.STATE_BUFFERING) {
-                    val realDuration = player.duration
-                    if (realDuration > 0L) {
-                        _durationMs.value = realDuration
-                        _currentTrack.value?.let { track ->
-                            scope.launch {
-                                musicRepository?.updateTrackDuration(track.id, realDuration)
+            override fun onPlaybackStateChanged(state: Int) {
+                when (state) {
+                    Player.STATE_IDLE -> {
+                        _playbackState.value = PlaybackState.Idle
+                    }
+                    Player.STATE_BUFFERING -> {
+                        _playbackState.value = PlaybackState.Buffering("檔案緩衝暫存中，請稍候...")
+                        Log.d(TAG, "ExoPlayer 狀態: 檔案緩衝暫存中...")
+                    }
+                    Player.STATE_READY -> {
+                        _playbackState.value = if (player.isPlaying) PlaybackState.Playing else PlaybackState.Paused
+                        val realDuration = player.duration
+                        if (realDuration > 0L) {
+                            _durationMs.value = realDuration
+                            _currentTrack.value?.let { track ->
+                                scope.launch {
+                                    musicRepository?.updateTrackDuration(track.id, realDuration)
+                                }
                             }
                         }
                     }
+                    Player.STATE_ENDED -> {
+                        _playbackState.value = PlaybackState.Ended
+                    }
                 }
+                updateStateFromPlayer(player)
             }
 
             override fun onPlayerError(error: PlaybackException) {
-                Log.e(TAG, "ExoPlayer PlayerError: [${error.errorCodeName}] ${error.message}", error)
+                Log.e(TAG, "ExoPlayer 播放錯誤: [${error.errorCodeName} / ${error.errorCode}]: ${error.message}", error)
                 val friendlyMessage = when (error.errorCode) {
                     PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS ->
-                        "伺服器回應錯誤 (可能是 401 認證無效或 404 找不到檔案)"
+                        "無法載入：伺服器驗證過期或無權限 (HTTP 401)"
+                    PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND ->
+                        "無法載入：雲端檔案不存在 (HTTP 404)"
                     PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
                     PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ->
-                        "網路連線超時，請確認伺服器狀態"
+                        "網路連線超時：請確認 Nextcloud 伺服器狀態"
                     PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
                     PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ->
-                        "音訊解碼失敗，不支援的格式"
+                        "音訊解碼失敗：不支援的音訊編碼格式"
                     else ->
-                        "播放出錯: ${error.localizedMessage ?: error.errorCodeName}"
+                        "播放失敗: ${error.localizedMessage ?: error.errorCodeName}"
                 }
+                _playbackState.value = PlaybackState.Error(friendlyMessage, error.message)
                 _playbackError.value = friendlyMessage
             }
 
@@ -157,7 +178,9 @@ class PlayerController(
     private fun updateCurrentTrack(player: Player) {
         val currentMediaItem = player.currentMediaItem ?: return
         val currentUri = currentMediaItem.mediaId
-        val track = currentPlaylist.find { it.streamUrl == currentUri || it.id == currentUri }
+        val track = currentPlaylist.find {
+            it.streamUrl == currentUri || it.id == currentUri || it.playableUri == currentUri
+        }
         _currentTrack.value = track
         if (player.duration > 0L) {
             _durationMs.value = player.duration
@@ -187,34 +210,40 @@ class PlayerController(
 
     fun playTracks(tracks: List<TrackEntity>, startIndex: Int = 0, coverUrl: String? = null) {
         val controller = mediaController ?: run {
-            Log.e(TAG, "mediaController is null, cannot play")
+            Log.e(TAG, "mediaController is null, connect first")
             return
         }
         if (tracks.isEmpty()) return
 
         currentPlaylist = tracks
         val mediaItems = tracks.map { track ->
-            val trackUri = Uri.parse(track.streamUrl)
+            // 優先使用可離線播放的本地 file:// URI，若未下載則使用 Nextcloud 串流 URL
+            val playbackUrl = track.playableUri
+            val playUri = Uri.parse(playbackUrl)
+            val effectiveCover = track.coverUrl ?: coverUrl
+
             val metadata = MediaMetadata.Builder()
                 .setTitle(track.title)
                 .setArtist(track.format)
-                .setArtworkUri(coverUrl?.let { Uri.parse(it) })
+                .setArtworkUri(effectiveCover?.let { Uri.parse(it) })
                 .build()
 
             MediaItem.Builder()
-                .setMediaId(track.streamUrl)
-                .setUri(trackUri)
+                .setMediaId(playbackUrl)
+                .setUri(playUri)
                 .setRequestMetadata(
                     MediaItem.RequestMetadata.Builder()
-                        .setMediaUri(trackUri)
+                        .setMediaUri(playUri)
                         .build()
                 )
                 .setMediaMetadata(metadata)
                 .build()
         }
 
-        Log.d(TAG, "playTracks: Setting ${mediaItems.size} items, starting at index $startIndex")
+        Log.d(TAG, "playTracks: 設定佇列共 ${mediaItems.size} 首，由第 $startIndex 首開始播放")
         _playbackError.value = null
+        _playbackState.value = PlaybackState.Buffering("檔案緩衝暫存中，請稍候...")
+
         controller.setMediaItems(mediaItems, startIndex, 0L)
         controller.prepare()
         controller.play()

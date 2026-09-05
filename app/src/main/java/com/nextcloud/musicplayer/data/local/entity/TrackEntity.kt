@@ -1,7 +1,6 @@
 package com.nextcloud.musicplayer.data.local.entity
 
 import androidx.room.Entity
-import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
 
@@ -19,5 +18,22 @@ data class TrackEntity(
     val fileSize: Long = 0L,
     val mimeType: String = "audio/mpeg",
     val trackNumber: Int = 0,
-    val format: String = "MP3"
-)
+    val format: String = "MP3",
+    val coverUrl: String? = null,
+    val isDownloaded: Boolean = false,
+    val localFilePath: String? = null
+) {
+    /**
+     * 播放路徑：若本機檔案存在且已下載完成，優先使用本機 file:// URI，實現離線播放
+     */
+    val playableUri: String
+        get() {
+            if (isDownloaded && !localFilePath.isNullOrBlank()) {
+                val file = java.io.File(localFilePath)
+                if (file.exists() && file.length() > 0) {
+                    return android.net.Uri.fromFile(file).toString()
+                }
+            }
+            return streamUrl
+        }
+}

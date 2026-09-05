@@ -10,5 +10,6 @@ data class AlbumEntity(
     val remotePath: String,
     val coverUrl: String?,
     val trackCount: Int = 0,
+    val isDownloaded: Boolean = false,
     val updatedAt: Long = System.currentTimeMillis()
 )

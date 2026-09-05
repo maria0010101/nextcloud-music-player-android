@@ -81,6 +81,9 @@ dependencies {
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)
 
+    // WorkManager (Background Album Download)
+    implementation(libs.androidx.work.runtime.ktx)
+
     // CameraX & ML Kit
     implementation(libs.androidx.camera.core)
     implementation(libs.androidx.camera.camera2)

@@ -15,8 +15,14 @@ interface AlbumDao {
     @Query("SELECT * FROM albums WHERE id = :id LIMIT 1")
     suspend fun getAlbumById(id: String): AlbumEntity?
 
+    @Query("SELECT * FROM albums WHERE id = :id LIMIT 1")
+    fun getAlbumByIdSync(id: String): AlbumEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAlbums(albums: List<AlbumEntity>): List<Long>
+
+    @Query("UPDATE albums SET isDownloaded = :isDownloaded WHERE id = :albumId")
+    suspend fun markAlbumDownloaded(albumId: String, isDownloaded: Boolean = true): Int
 
     @Query("DELETE FROM albums WHERE id = :id")
     suspend fun deleteAlbum(id: String): Int

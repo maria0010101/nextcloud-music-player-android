@@ -55,6 +55,7 @@ class MainActivity : ComponentActivity() {
         val prefs = app.securePreferencesManager
         val webDavClient = app.webDavClient
         val loginFlowClient = app.loginFlowClient
+        val qrLoginManager = app.qrLoginManager
         val repository = app.musicRepository
         val playerController = app.playerController
 
@@ -101,7 +102,7 @@ class MainActivity : ComponentActivity() {
                         ) {
                             composable("login") {
                                 val loginViewModel = remember {
-                                    LoginViewModel(prefs, webDavClient, loginFlowClient)
+                                    LoginViewModel(prefs, webDavClient, loginFlowClient, qrLoginManager)
                                 }
                                 LoginScreen(
                                     viewModel = loginViewModel,
@@ -118,7 +119,7 @@ class MainActivity : ComponentActivity() {
 
                             composable("qr_scanner") {
                                 val loginViewModel = remember {
-                                    LoginViewModel(prefs, webDavClient, loginFlowClient)
+                                    LoginViewModel(prefs, webDavClient, loginFlowClient, qrLoginManager)
                                 }
                                 QrScannerScreen(
                                     onQrCodeDetected = { scannedText ->
@@ -154,7 +155,7 @@ class MainActivity : ComponentActivity() {
                                 val rawId = backStackEntry.arguments?.getString("albumId") ?: ""
                                 val albumId = URLDecoder.decode(rawId, "UTF-8")
                                 val detailViewModel = remember(albumId) {
-                                    AlbumDetailViewModel(albumId, repository, playerController)
+                                    AlbumDetailViewModel(albumId, repository, playerController, applicationContext)
                                 }
                                 AlbumDetailScreen(
                                     viewModel = detailViewModel,
@@ -164,6 +165,7 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
+                    // 模組 2：滑出式全螢幕播放視窗 (Bottom Sheet)
                     if (isPlayerSheetVisible) {
                         ModalBottomSheet(
                             onDismissRequest = { isPlayerSheetVisible = false },

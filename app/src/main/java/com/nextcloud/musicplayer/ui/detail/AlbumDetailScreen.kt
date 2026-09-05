@@ -16,6 +16,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
@@ -28,8 +29,14 @@ fun AlbumDetailScreen(
     viewModel: AlbumDetailViewModel,
     onBack: () -> Unit
 ) {
+    val context = LocalContext.current
     val album by viewModel.album.collectAsState()
     val tracks by viewModel.tracks.collectAsState()
+    val downloadStatus by viewModel.downloadStatus.collectAsState()
+
+    LaunchedEffect(Unit) {
+        viewModel.observeDownloadProgress(context)
+    }
 
     Scaffold(
         topBar = {
@@ -109,6 +116,33 @@ fun AlbumDetailScreen(
                             Text("隨機播放")
                         }
                     }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // 模組 4：整張專輯離線下載按鈕
+                    FilledTonalButton(
+                        onClick = { viewModel.startDownloadAlbum(context) },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        enabled = downloadStatus == null || downloadStatus == "已完成下載"
+                    ) {
+                        if (downloadStatus != null && downloadStatus != "已完成下載") {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(downloadStatus!!)
+                        } else if (album?.isDownloaded == true || downloadStatus == "已完成下載") {
+                            Icon(Icons.Default.CheckCircle, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("整張專輯已下載至本機 (離線可用)")
+                        } else {
+                            Icon(Icons.Default.Download, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("下載整張專輯 (離線播放)")
+                        }
+                    }
                 }
             }
 
@@ -166,12 +200,25 @@ fun TrackListItem(
             Spacer(modifier = Modifier.width(14.dp))
 
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = track.title,
-                    style = MaterialTheme.typography.bodyLarge,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = track.title,
+                        style = MaterialTheme.typography.bodyLarge,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+
+                    if (track.isDownloaded) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Icon(
+                            imageVector = Icons.Default.OfflinePin,
+                            contentDescription = "已下載離線",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
 
                 Spacer(modifier = Modifier.height(2.dp))
 

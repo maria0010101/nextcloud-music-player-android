@@ -12,8 +12,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.Player
+import coil.compose.AsyncImage
+import com.nextcloud.musicplayer.playback.PlaybackState
 import com.nextcloud.musicplayer.playback.PlayerController
 import java.util.Locale
 
@@ -25,6 +30,7 @@ fun PlayerScreen(
 ) {
     val currentTrack by playerController.currentTrack.collectAsState()
     val isPlaying by playerController.isPlaying.collectAsState()
+    val playbackState by playerController.playbackState.collectAsState()
     val positionMs by playerController.currentPositionMs.collectAsState()
     val durationMs by playerController.durationMs.collectAsState()
     val shuffleEnabled by playerController.shuffleModeEnabled.collectAsState()
@@ -45,7 +51,11 @@ fun PlayerScreen(
                 title = { Text("現正播放") },
                 navigationIcon = {
                     IconButton(onClick = onDismiss) {
-                        Icon(Icons.Default.KeyboardArrowDown, contentDescription = "收起", modifier = Modifier.size(32.dp))
+                        Icon(
+                            Icons.Default.KeyboardArrowDown,
+                            contentDescription = "收起",
+                            modifier = Modifier.size(32.dp)
+                        )
                     }
                 }
             )
@@ -60,7 +70,7 @@ fun PlayerScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.SpaceEvenly
             ) {
-                // Big Audio Art Area
+                // 1. 專輯封面連動區域
                 Box(
                     modifier = Modifier
                         .size(280.dp)
@@ -75,37 +85,109 @@ fun PlayerScreen(
                         ),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.MusicNote,
-                        contentDescription = null,
-                        modifier = Modifier.size(120.dp),
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                }
+                    if (!track.coverUrl.isNullOrBlank()) {
+                        AsyncImage(
+                            model = track.coverUrl,
+                            contentDescription = track.title,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.MusicNote,
+                            contentDescription = null,
+                            modifier = Modifier.size(120.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
 
-                // Track Info & Badges
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        text = track.title,
-                        style = MaterialTheme.typography.titleLarge
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        SuggestionChip(
-                            onClick = {},
-                            label = { Text(track.format) }
-                        )
-                        SuggestionChip(
-                            onClick = {},
-                            label = { Text("ExoPlayer 邊播邊存 (1GB 快取)") }
-                        )
+                    // 緩衝動畫與文字覆蓋層
+                    if (playbackState is PlaybackState.Buffering) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Color.Black.copy(alpha = 0.6f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                CircularProgressIndicator(
+                                    color = MaterialTheme.colorScheme.primary,
+                                    strokeWidth = 3.dp
+                                )
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Text(
+                                    text = (playbackState as PlaybackState.Buffering).message,
+                                    color = Color.White,
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                            }
+                        }
                     }
                 }
 
-                // Seekbar and Timestamp
+                // 2. 錯誤狀態或曲目資訊顯示
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = track.title,
+                        style = MaterialTheme.typography.titleLarge,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    if (playbackState is PlaybackState.Error) {
+                        val errorState = playbackState as PlaybackState.Error
+                        Surface(
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.padding(horizontal = 8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    Icons.Default.Warning,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = errorState.reason,
+                                    color = MaterialTheme.colorScheme.onErrorContainer,
+                                    style = MaterialTheme.typography.labelMedium
+                                )
+                            }
+                        }
+                    } else {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            SuggestionChip(
+                                onClick = {},
+                                label = { Text(track.format) }
+                            )
+
+                            if (track.isDownloaded) {
+                                SuggestionChip(
+                                    onClick = {},
+                                    label = { Text("已離線下載") },
+                                    colors = SuggestionChipDefaults.suggestionChipColors(
+                                        containerColor = MaterialTheme.colorScheme.secondaryContainer
+                                    )
+                                )
+                            } else {
+                                SuggestionChip(
+                                    onClick = {},
+                                    label = { Text("1GB 邊播邊存") }
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // 3. 進度條與時間刻度
                 Column(modifier = Modifier.fillMaxWidth()) {
                     Slider(
                         value = currentSliderValue,
@@ -143,7 +225,7 @@ fun PlayerScreen(
                     }
                 }
 
-                // Playback Control Buttons
+                // 4. 控制按鍵群
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -175,11 +257,19 @@ fun PlayerScreen(
                         contentColor = MaterialTheme.colorScheme.onPrimary,
                         modifier = Modifier.size(68.dp)
                     ) {
-                        Icon(
-                            imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                            contentDescription = if (isPlaying) "暫停" else "播放",
-                            modifier = Modifier.size(40.dp)
-                        )
+                        if (playbackState is PlaybackState.Buffering) {
+                            CircularProgressIndicator(
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                modifier = Modifier.size(32.dp),
+                                strokeWidth = 3.dp
+                            )
+                        } else {
+                            Icon(
+                                imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                contentDescription = if (isPlaying) "暫停" else "播放",
+                                modifier = Modifier.size(40.dp)
+                            )
+                        }
                     }
 
                     // Next

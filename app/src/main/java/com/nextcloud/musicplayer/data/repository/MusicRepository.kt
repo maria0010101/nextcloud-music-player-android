@@ -1,5 +1,7 @@
 package com.nextcloud.musicplayer.data.repository
 
+import android.content.Context
+import android.os.Environment
 import android.util.Log
 import com.nextcloud.musicplayer.core.network.NextcloudWebDavClient
 import com.nextcloud.musicplayer.core.network.WebDavItem
@@ -10,12 +12,15 @@ import com.nextcloud.musicplayer.data.local.entity.TrackEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.net.URLDecoder
+import java.util.ArrayDeque
 
 class MusicRepository(
     private val webDavClient: NextcloudWebDavClient,
-    private val database: AppDatabase,
-    private val prefsManager: SecurePreferencesManager
+    val database: AppDatabase,
+    private val prefsManager: SecurePreferencesManager,
+    private val context: Context? = null
 ) {
 
     private val TAG = "MusicRepository"
@@ -35,7 +40,7 @@ class MusicRepository(
     }
 
     /**
-     * 単層瀏覽資料夾目錄 (Depth: 1)，專供目錄瀏覽選取器使用
+     * 單層瀏覽資料夾目錄 (Depth: 1)，專供目錄選取對話框使用
      */
     suspend fun listDirectories(folderPath: String): Result<List<WebDavItem>> = withContext(Dispatchers.IO) {
         try {
@@ -52,7 +57,6 @@ class MusicRepository(
             }
 
             val items = result.getOrDefault(emptyList())
-            // 僅回傳資料夾，並過濾掉當前根節點
             val directories = items.filter { it.isCollection && !isSamePath(it.href, targetUrl) }
             Result.success(directories)
         } catch (e: Exception) {
@@ -62,7 +66,11 @@ class MusicRepository(
     }
 
     /**
-     * 局限掃描：僅針對使用者指定的目錄 (例如 /Music) 進行音訊與封面掃描
+     * 模組 3：資料夾層級掃描邏輯（葉子/含音訊目錄判定）
+     * 規則：
+     * 1. 若母資料夾僅包含子資料夾、本身沒有任何音訊檔案，禁止將該母資料夾列為獨立專輯。
+     * 2. 以「包含音訊檔案的資料夾」作為最小單位識別為「一張專輯」。
+     * 3. 巢狀層級相容：遞迴遍歷所有子資料夾，只要子資料夾內含有音訊檔案，該子資料夾即成為獨立專輯。
      */
     suspend fun scanMusicLibrary(
         scopedFolder: String = "",
@@ -76,114 +84,99 @@ class MusicRepository(
             val targetBaseUrl = if (cleanFolder.isEmpty()) rootHref else "$rootHref/$cleanFolder"
             val folderDisplayName = if (cleanFolder.isEmpty()) "根目錄" else "/$cleanFolder"
 
-            onProgress("正在連線 WebDAV: $folderDisplayName")
+            onProgress("正在連線 WebDAV: $folderDisplayName...")
             Log.d(TAG, "Starting scoped scan in: $targetBaseUrl")
 
-            val targetItemsResult = webDavClient.listFolder(targetBaseUrl, depth = 1)
-            if (targetItemsResult.isFailure) {
-                val err = targetItemsResult.exceptionOrNull() ?: Exception("無法存取指定資料夾: $folderDisplayName")
-                Log.e(TAG, "Failed to list folder $targetBaseUrl", err)
-                return@withContext Result.failure(err)
-            }
-
-            val targetItems = targetItemsResult.getOrDefault(emptyList())
-            val subFolders = targetItems.filter { it.isCollection && !isSamePath(it.href, targetBaseUrl) }
-            val directAudios = targetItems.filter { it.isAudioFile }
+            val folderQueue = ArrayDeque<String>()
+            folderQueue.add(targetBaseUrl)
 
             val discoveredAlbums = mutableListOf<AlbumEntity>()
             val discoveredTracks = mutableListOf<TrackEntity>()
+            var scannedFolderCount = 0
 
-            // 1. 若選定目錄下直接包含音訊檔，將其建立為該資料夾專屬專輯
-            if (directAudios.isNotEmpty()) {
-                val directCover = findCoverImage(targetItems)
-                val directAlbumId = normalizePath(targetBaseUrl)
-                val directAlbum = AlbumEntity(
-                    id = directAlbumId,
-                    name = if (cleanFolder.isEmpty()) "音樂檔案" else cleanFolder.substringAfterLast('/'),
-                    remotePath = targetBaseUrl,
-                    coverUrl = directCover?.let { webDavClient.resolveFullUrl(it.href) },
-                    trackCount = directAudios.size
-                )
-                discoveredAlbums.add(directAlbum)
+            while (!folderQueue.isEmpty()) {
+                val currentFolderUrl = folderQueue.poll() ?: break
+                scannedFolderCount++
 
-                directAudios.forEachIndexed { index, audioItem ->
-                    discoveredTracks.add(createTrackEntity(audioItem, directAlbumId, index + 1))
+                val currentFolderName = try {
+                    URLDecoder.decode(currentFolderUrl, "UTF-8").trimEnd('/').substringAfterLast('/')
+                } catch (_: Exception) {
+                    currentFolderUrl.trimEnd('/').substringAfterLast('/')
                 }
-            }
 
-            // 2. 掃描各子資料夾 (視為個別專輯)
-            for ((index, folder) in subFolders.withIndex()) {
-                val folderName = folder.displayName.ifBlank {
-                    folder.href.trimEnd('/').substringAfterLast('/')
+                onProgress("掃描資料夾 ($scannedFolderCount): $currentFolderName")
+
+                val itemsResult = webDavClient.listFolder(currentFolderUrl, depth = 1)
+                if (itemsResult.isFailure) {
+                    Log.w(TAG, "Skipping inaccessible folder: $currentFolderUrl")
+                    continue
                 }
-                onProgress("掃描專輯 (${index + 1}/${subFolders.size}): $folderName")
 
-                val folderContentsResult = webDavClient.listFolder(folder.href, depth = 1)
-                if (folderContentsResult.isFailure) continue
+                val items = itemsResult.getOrDefault(emptyList())
+                val directAudios = items.filter { it.isAudioFile }
+                val directSubFolders = items.filter { it.isCollection && !isSamePath(it.href, currentFolderUrl) }
 
-                val items = folderContentsResult.getOrDefault(emptyList())
-                val audioFiles = items.filter { it.isAudioFile }
-                val nestedFolders = items.filter { it.isCollection && !isSamePath(it.href, folder.href) }
-
-                if (audioFiles.isNotEmpty()) {
+                // 核心規則：檢查當前資料夾本身是否「直接包含音訊檔案」
+                if (directAudios.isNotEmpty()) {
+                    // 本身含有音訊 -> 識別為一張獨立專輯
                     val cover = findCoverImage(items)
-                    val albumId = normalizePath(folder.href)
+                    val coverFullUrl = cover?.let { webDavClient.resolveFullUrl(it.href) }
+                    val albumId = normalizePath(currentFolderUrl)
+
                     val album = AlbumEntity(
                         id = albumId,
-                        name = folderName,
-                        remotePath = folder.href,
-                        coverUrl = cover?.let { webDavClient.resolveFullUrl(it.href) },
-                        trackCount = audioFiles.size
+                        name = currentFolderName.ifBlank { "音樂專輯" },
+                        remotePath = currentFolderUrl,
+                        coverUrl = coverFullUrl,
+                        trackCount = directAudios.size
                     )
                     discoveredAlbums.add(album)
 
-                    audioFiles.forEachIndexed { trackIdx, audioItem ->
-                        discoveredTracks.add(createTrackEntity(audioItem, albumId, trackIdx + 1))
+                    directAudios.forEachIndexed { index, audioItem ->
+                        discoveredTracks.add(createTrackEntity(audioItem, albumId, index + 1, coverFullUrl))
                     }
+                    Log.d(TAG, "發現專輯 [${album.name}] (曲目數: ${directAudios.size})")
+                } else {
+                    // 本身沒有任何音訊檔案 -> 判定為純容器母目錄，嚴格禁止加入專輯列表！
+                    Log.d(TAG, "母資料夾 [$currentFolderName] 內無直接音訊，排除為專輯，繼續搜尋子資料夾")
                 }
 
-                // 若子資料夾內包含第二層資料夾 (如 歌手/專輯)，再多讀取一層
-                for (nested in nestedFolders) {
-                    val nestedName = nested.displayName.ifBlank {
-                        nested.href.trimEnd('/').substringAfterLast('/')
-                    }
-                    val nestedResult = webDavClient.listFolder(nested.href, depth = 1)
-                    if (nestedResult.isFailure) continue
-
-                    val nestedItems = nestedResult.getOrDefault(emptyList())
-                    val nestedAudios = nestedItems.filter { it.isAudioFile }
-                    if (nestedAudios.isNotEmpty()) {
-                        val nestedCover = findCoverImage(nestedItems) ?: findCoverImage(items)
-                        val nestedAlbumId = normalizePath(nested.href)
-                        val album = AlbumEntity(
-                            id = nestedAlbumId,
-                            name = "$folderName - $nestedName",
-                            remotePath = nested.href,
-                            coverUrl = nestedCover?.let { webDavClient.resolveFullUrl(it.href) },
-                            trackCount = nestedAudios.size
-                        )
-                        discoveredAlbums.add(album)
-
-                        nestedAudios.forEachIndexed { trackIdx, audioItem ->
-                            discoveredTracks.add(createTrackEntity(audioItem, nestedAlbumId, trackIdx + 1))
-                        }
-                    }
+                // 將所有子資料夾加入佇列，進一步深入掃描
+                for (subFolder in directSubFolders) {
+                    folderQueue.add(subFolder.href)
                 }
             }
 
             onProgress("正在存入快取資料庫 (${discoveredAlbums.size} 張專輯、${discoveredTracks.size} 首歌曲)...")
 
+            // 檢查本機離線檔案是否存在，若存在則標記 isDownloaded
+            val updatedTracks = checkExistingLocalFiles(discoveredTracks)
+
             // 儲存至 Room
             database.albumDao().clearAlbums()
             database.trackDao().clearTracks()
             database.albumDao().insertAlbums(discoveredAlbums)
-            database.trackDao().insertTracks(discoveredTracks)
+            database.trackDao().insertTracks(updatedTracks)
 
-            onProgress("掃描完成！共發現 ${discoveredTracks.size} 首歌曲")
+            onProgress("掃描完成！發現 ${discoveredAlbums.size} 張有效專輯、共 ${discoveredTracks.size} 首歌曲")
             Result.success(discoveredTracks.size)
         } catch (e: Exception) {
-            Log.e(TAG, "Scan failed with exception", e)
+            Log.e(TAG, "掃描過程發生錯誤", e)
             Result.failure(e)
+        }
+    }
+
+    private fun checkExistingLocalFiles(tracks: List<TrackEntity>): List<TrackEntity> {
+        val baseDir = context?.getExternalFilesDir(Environment.DIRECTORY_MUSIC) ?: return tracks
+        return tracks.map { track ->
+            val safeAlbum = track.albumId.trimEnd('/').substringAfterLast('/')
+            val safeFile = track.title.replace("/", "_") + "." + track.format.lowercase()
+            val localFile = File(baseDir, "albums/$safeAlbum/$safeFile")
+            if (localFile.exists() && localFile.length() > 0) {
+                track.copy(isDownloaded = true, localFilePath = localFile.absolutePath)
+            } else {
+                track
+            }
         }
     }
 
@@ -200,7 +193,12 @@ class MusicRepository(
         return images.firstOrNull()
     }
 
-    private fun createTrackEntity(audioItem: WebDavItem, albumId: String, trackNumber: Int): TrackEntity {
+    private fun createTrackEntity(
+        audioItem: WebDavItem,
+        albumId: String,
+        trackNumber: Int,
+        coverUrl: String?
+    ): TrackEntity {
         val rawTitle = audioItem.displayName.ifBlank {
             audioItem.href.trimEnd('/').substringAfterLast('/')
         }
@@ -219,7 +217,10 @@ class MusicRepository(
             fileSize = audioItem.contentLength,
             mimeType = audioItem.contentType ?: "audio/mpeg",
             trackNumber = trackNumber,
-            format = audioItem.audioFormat
+            format = audioItem.audioFormat,
+            coverUrl = coverUrl,
+            isDownloaded = false,
+            localFilePath = null
         )
     }
 
