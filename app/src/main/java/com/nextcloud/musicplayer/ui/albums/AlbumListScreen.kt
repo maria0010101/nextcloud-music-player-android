@@ -7,6 +7,8 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ViewList
@@ -21,6 +23,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.nextcloud.musicplayer.data.local.entity.AlbumEntity
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -34,6 +37,10 @@ fun AlbumListScreen(
     val isSyncing by viewModel.isSyncing.collectAsState()
     val syncMessage by viewModel.syncMessage.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
+
+    val gridState = rememberLazyGridState()
+    val listState = rememberLazyListState()
+    val coroutineScope = rememberCoroutineScope()
 
     Scaffold(
         topBar = {
@@ -153,27 +160,60 @@ fun AlbumListScreen(
                         }
                     }
                 }
-            } else if (isGridMode) {
-                LazyVerticalGrid(
-                    columns = GridCells.Adaptive(minSize = 150.dp),
-                    contentPadding = PaddingValues(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(16.dp),
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    items(albums, key = { it.id }) { album ->
-                        AlbumGridItem(album = album, onClick = { onAlbumClick(album.id) })
-                    }
-                }
             } else {
-                LazyColumn(
-                    contentPadding = PaddingValues(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    items(albums, key = { it.id }) { album ->
-                        AlbumListItem(album = album, onClick = { onAlbumClick(album.id) })
+                Box(modifier = Modifier.fillMaxSize()) {
+                    if (isGridMode) {
+                        LazyVerticalGrid(
+                            state = gridState,
+                            columns = GridCells.Adaptive(minSize = 150.dp),
+                            contentPadding = PaddingValues(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            items(albums, key = { it.id }) { album ->
+                                AlbumGridItem(album = album, onClick = { onAlbumClick(album.id) })
+                            }
+                        }
+                    } else {
+                        LazyColumn(
+                            state = listState,
+                            contentPadding = PaddingValues(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            items(albums, key = { it.id }) { album ->
+                                AlbumListItem(album = album, onClick = { onAlbumClick(album.id) })
+                            }
+                        }
                     }
+
+                    // 需求 1：快速捲動軸（Fast Scrollbar，含可拖曳 Thumb 與首字氣泡）
+                    FastScrollbar(
+                        totalItemCount = albums.size,
+                        firstVisibleIndex = if (isGridMode) gridState.firstVisibleItemIndex else listState.firstVisibleItemIndex,
+                        isScrollInProgress = if (isGridMode) gridState.isScrollInProgress else listState.isScrollInProgress,
+                        onScrollToItem = { targetIndex ->
+                            coroutineScope.launch {
+                                if (isGridMode) {
+                                    gridState.scrollToItem(targetIndex)
+                                } else {
+                                    listState.scrollToItem(targetIndex)
+                                }
+                            }
+                        },
+                        getIndicatorText = { index ->
+                            val name = albums.getOrNull(index)?.name.orEmpty()
+                            val firstChar = name.firstOrNull() ?: '#'
+                            if (firstChar.isLetter()) firstChar.uppercaseChar().toString()
+                            else if (firstChar.isDigit()) firstChar.toString()
+                            else "#"
+                        },
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .fillMaxHeight()
+                            .padding(top = 8.dp, bottom = 8.dp, end = 2.dp)
+                    )
                 }
             }
         }
