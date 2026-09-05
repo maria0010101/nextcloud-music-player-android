@@ -14,7 +14,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 class AlbumListViewModel(
-    private val repository: MusicRepository,
+    val repository: MusicRepository,
     private val prefsManager: SecurePreferencesManager
 ) : ViewModel() {
 
@@ -33,6 +33,9 @@ class AlbumListViewModel(
     private val _syncMessage = MutableStateFlow("")
     val syncMessage: StateFlow<String> = _syncMessage.asStateFlow()
 
+    private val _selectedFolder = MutableStateFlow(prefsManager.getSelectedMusicFolder())
+    val selectedFolder: StateFlow<String> = _selectedFolder.asStateFlow()
+
     val filteredAlbums: StateFlow<List<AlbumEntity>> = combine(rawAlbums, _searchQuery) { albums, query ->
         if (query.isBlank()) {
             albums
@@ -49,20 +52,31 @@ class AlbumListViewModel(
         _isGridMode.value = !_isGridMode.value
     }
 
+    fun updateSelectedFolder(newFolder: String) {
+        val clean = newFolder.trim().trim('/')
+        _selectedFolder.value = clean
+        prefsManager.saveSelectedMusicFolder(clean)
+        syncLibrary()
+    }
+
     fun syncLibrary() {
         if (_isSyncing.value) return
         _isSyncing.value = true
-        _syncMessage.value = "開始連線 WebDAV 進行掃描..."
+        val targetFolder = _selectedFolder.value
+        val display = if (targetFolder.isEmpty()) "根目錄" else "/$targetFolder"
+        _syncMessage.value = "開始連線掃描 $display..."
 
         viewModelScope.launch {
             val result = repository.scanMusicLibrary(
+                scopedFolder = targetFolder,
                 onProgress = { msg -> _syncMessage.value = msg }
             )
             _isSyncing.value = false
             if (result.isFailure) {
                 _syncMessage.value = "掃描失敗: ${result.exceptionOrNull()?.localizedMessage}"
             } else {
-                _syncMessage.value = "掃描完成！"
+                val count = result.getOrDefault(0)
+                _syncMessage.value = "掃描完成！共同步 $count 首歌曲"
             }
         }
     }

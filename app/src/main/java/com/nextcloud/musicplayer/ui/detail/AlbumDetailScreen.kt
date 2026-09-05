@@ -8,6 +8,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -19,6 +20,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.nextcloud.musicplayer.data.local.entity.TrackEntity
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -35,7 +37,7 @@ fun AlbumDetailScreen(
                 title = { Text(album?.name ?: "專輯曲目") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "返回")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
                 }
             )
@@ -187,14 +189,16 @@ fun TrackListItem(
 
                     Spacer(modifier = Modifier.width(8.dp))
 
-                    val formattedSize = if (track.fileSize > 0) {
+                    val timeOrSizeText = if (track.durationMs > 0L) {
+                        formatDurationText(track.durationMs)
+                    } else if (track.fileSize > 0) {
                         "%.1f MB".format(track.fileSize / (1024f * 1024f))
                     } else {
                         "串流音訊"
                     }
 
                     Text(
-                        text = formattedSize,
+                        text = timeOrSizeText,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -210,4 +214,11 @@ fun TrackListItem(
             }
         }
     }
+}
+
+private fun formatDurationText(millis: Long): String {
+    val totalSeconds = millis / 1000
+    val minutes = totalSeconds / 60
+    val seconds = totalSeconds % 60
+    return String.format(Locale.getDefault(), "%02d:%02d", minutes, seconds)
 }

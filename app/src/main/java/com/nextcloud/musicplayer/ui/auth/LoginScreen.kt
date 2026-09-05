@@ -5,6 +5,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Login
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -15,6 +16,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.flow.collectLatest
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -25,6 +27,7 @@ fun LoginScreen(
 ) {
     val context = LocalContext.current
     val uiState by viewModel.uiState.collectAsState()
+    val snackbarHostState = remember { SnackbarHostState() }
 
     var serverUrl by remember { mutableStateOf("https://") }
     var username by remember { mutableStateOf("") }
@@ -38,7 +41,14 @@ fun LoginScreen(
         }
     }
 
+    LaunchedEffect(Unit) {
+        viewModel.toastEvent.collectLatest { msg ->
+            snackbarHostState.showSnackbar(msg)
+        }
+    }
+
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text("Nextcloud 連線設定") },
@@ -78,7 +88,7 @@ fun LoginScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            TabRow(selectedTabIndex = selectedTab) {
+            PrimaryTabRow(selectedTabIndex = selectedTab) {
                 Tab(
                     selected = selectedTab == 0,
                     onClick = { selectedTab = 0 },
@@ -107,7 +117,7 @@ fun LoginScreen(
                 // Official Login Flow v2
                 Spacer(modifier = Modifier.height(16.dp))
                 Text(
-                    text = "使用 Nextcloud 官方 Login Flow v2：點擊下方按鈕將開啟瀏覽器登入授權，系統將自動取得 App 專用密碼，無需手動輸入金鑰。",
+                    text = "使用 Nextcloud 官方 Login Flow v2：點擊下方按鈕將開啟瀏覽器登入授權，系統將自動取得 App 專用密碼；亦可直接掃描網頁端產生的授權 QR 碼。",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -119,7 +129,7 @@ fun LoginScreen(
                     modifier = Modifier.fillMaxWidth(),
                     enabled = uiState !is LoginUiState.Loading
                 ) {
-                    Icon(Icons.Default.Login, contentDescription = null)
+                    Icon(Icons.AutoMirrored.Filled.Login, contentDescription = null)
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("以瀏覽器進行官方授權")
                 }

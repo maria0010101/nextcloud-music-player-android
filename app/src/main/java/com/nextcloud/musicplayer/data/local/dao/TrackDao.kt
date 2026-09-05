@@ -18,6 +18,9 @@ interface TrackDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertTracks(tracks: List<TrackEntity>): List<Long>
 
+    @Query("UPDATE tracks SET durationMs = :durationMs WHERE id = :id OR streamUrl = :id")
+    suspend fun updateDuration(id: String, durationMs: Long): Int
+
     @Query("DELETE FROM tracks WHERE albumId = :albumId")
     suspend fun deleteTracksByAlbum(albumId: String): Int
 

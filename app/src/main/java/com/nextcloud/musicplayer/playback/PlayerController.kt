@@ -3,14 +3,17 @@ package com.nextcloud.musicplayer.playback
 import android.content.ComponentName
 import android.content.Context
 import android.net.Uri
+import android.util.Log
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
 import com.nextcloud.musicplayer.data.local.entity.TrackEntity
+import com.nextcloud.musicplayer.data.repository.MusicRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -21,8 +24,12 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-class PlayerController(private val context: Context) {
+class PlayerController(
+    private val context: Context,
+    private val musicRepository: MusicRepository? = null
+) {
 
+    private val TAG = "PlayerController"
     private val scope = CoroutineScope(Dispatchers.Main)
     private var controllerFuture: ListenableFuture<MediaController>? = null
     private var mediaController: MediaController? = null
@@ -45,6 +52,9 @@ class PlayerController(private val context: Context) {
     private val _repeatMode = MutableStateFlow(Player.REPEAT_MODE_OFF)
     val repeatMode: StateFlow<Int> = _repeatMode.asStateFlow()
 
+    private val _playbackError = MutableStateFlow<String?>(null)
+    val playbackError: StateFlow<String?> = _playbackError.asStateFlow()
+
     private var currentPlaylist = listOf<TrackEntity>()
     private var progressPollingJob: Job? = null
 
@@ -63,8 +73,9 @@ class PlayerController(private val context: Context) {
                 mediaController = controller
                 setupPlayerListener(controller)
                 updateStateFromPlayer(controller)
+                Log.d(TAG, "MediaController successfully connected")
             } catch (e: Exception) {
-                e.printStackTrace()
+                Log.e(TAG, "Failed to connect MediaController", e)
             }
         }, MoreExecutors.directExecutor())
     }
@@ -86,6 +97,36 @@ class PlayerController(private val context: Context) {
 
             override fun onPlaybackStateChanged(playbackState: Int) {
                 updateStateFromPlayer(player)
+
+                // 動態獲取音訊真實長度並寫入 Room 資料庫快取
+                if (playbackState == Player.STATE_READY || playbackState == Player.STATE_BUFFERING) {
+                    val realDuration = player.duration
+                    if (realDuration > 0L) {
+                        _durationMs.value = realDuration
+                        _currentTrack.value?.let { track ->
+                            scope.launch {
+                                musicRepository?.updateTrackDuration(track.id, realDuration)
+                            }
+                        }
+                    }
+                }
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+                Log.e(TAG, "ExoPlayer PlayerError: [${error.errorCodeName}] ${error.message}", error)
+                val friendlyMessage = when (error.errorCode) {
+                    PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS ->
+                        "伺服器回應錯誤 (可能是 401 認證無效或 404 找不到檔案)"
+                    PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+                    PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ->
+                        "網路連線超時，請確認伺服器狀態"
+                    PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
+                    PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ->
+                        "音訊解碼失敗，不支援的格式"
+                    else ->
+                        "播放出錯: ${error.localizedMessage ?: error.errorCodeName}"
+                }
+                _playbackError.value = friendlyMessage
             }
 
             override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) {
@@ -101,7 +142,9 @@ class PlayerController(private val context: Context) {
     private fun updateStateFromPlayer(player: Player) {
         _isPlaying.value = player.isPlaying
         _currentPositionMs.value = player.currentPosition.coerceAtLeast(0L)
-        _durationMs.value = player.duration.coerceAtLeast(0L)
+        if (player.duration > 0L) {
+            _durationMs.value = player.duration
+        }
         _shuffleModeEnabled.value = player.shuffleModeEnabled
         _repeatMode.value = player.repeatMode
         updateCurrentTrack(player)
@@ -116,7 +159,9 @@ class PlayerController(private val context: Context) {
         val currentUri = currentMediaItem.mediaId
         val track = currentPlaylist.find { it.streamUrl == currentUri || it.id == currentUri }
         _currentTrack.value = track
-        _durationMs.value = player.duration.coerceAtLeast(0L)
+        if (player.duration > 0L) {
+            _durationMs.value = player.duration
+        }
     }
 
     private fun startProgressPolling() {
@@ -141,11 +186,15 @@ class PlayerController(private val context: Context) {
     }
 
     fun playTracks(tracks: List<TrackEntity>, startIndex: Int = 0, coverUrl: String? = null) {
-        val controller = mediaController ?: return
+        val controller = mediaController ?: run {
+            Log.e(TAG, "mediaController is null, cannot play")
+            return
+        }
         if (tracks.isEmpty()) return
 
         currentPlaylist = tracks
         val mediaItems = tracks.map { track ->
+            val trackUri = Uri.parse(track.streamUrl)
             val metadata = MediaMetadata.Builder()
                 .setTitle(track.title)
                 .setArtist(track.format)
@@ -154,11 +203,18 @@ class PlayerController(private val context: Context) {
 
             MediaItem.Builder()
                 .setMediaId(track.streamUrl)
-                .setUri(track.streamUrl)
+                .setUri(trackUri)
+                .setRequestMetadata(
+                    MediaItem.RequestMetadata.Builder()
+                        .setMediaUri(trackUri)
+                        .build()
+                )
                 .setMediaMetadata(metadata)
                 .build()
         }
 
+        Log.d(TAG, "playTracks: Setting ${mediaItems.size} items, starting at index $startIndex")
+        _playbackError.value = null
         controller.setMediaItems(mediaItems, startIndex, 0L)
         controller.prepare()
         controller.play()
@@ -208,6 +264,10 @@ class PlayerController(private val context: Context) {
         }
         controller.repeatMode = nextMode
         _repeatMode.value = nextMode
+    }
+
+    fun clearPlaybackError() {
+        _playbackError.value = null
     }
 
     fun disconnect() {

@@ -10,12 +10,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import androidx.navigation.NavType
@@ -65,10 +61,19 @@ class MainActivity : ComponentActivity() {
         setContent {
             NextcloudMusicTheme {
                 val navController = rememberNavController()
+                val snackbarHostState = remember { SnackbarHostState() }
                 val startDestination = if (prefs.hasCredentials()) "albums" else "login"
 
                 var isPlayerSheetVisible by remember { mutableStateOf(false) }
                 val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+                val playbackError by playerController.playbackError.collectAsState()
+                LaunchedEffect(playbackError) {
+                    playbackError?.let { err ->
+                        snackbarHostState.showSnackbar(err)
+                        playerController.clearPlaybackError()
+                    }
+                }
 
                 var currentRoute by remember { mutableStateOf(startDestination) }
                 LaunchedEffect(navController) {
@@ -79,6 +84,7 @@ class MainActivity : ComponentActivity() {
 
                 Box(modifier = Modifier.fillMaxSize()) {
                     Scaffold(
+                        snackbarHost = { SnackbarHost(snackbarHostState) },
                         bottomBar = {
                             if (currentRoute.startsWith("albums") || currentRoute.startsWith("album_detail")) {
                                 MiniPlayerBar(

@@ -35,6 +35,16 @@ class SecurePreferencesManager(context: Context) {
 
     fun getAppPassword(): String? = sharedPreferences.getString(KEY_APP_PASSWORD, null)
 
+    fun saveSelectedMusicFolder(folderPath: String) {
+        sharedPreferences.edit()
+            .putString(KEY_MUSIC_FOLDER, folderPath.trim())
+            .apply()
+    }
+
+    fun getSelectedMusicFolder(): String {
+        return sharedPreferences.getString(KEY_MUSIC_FOLDER, "") ?: ""
+    }
+
     fun getBasicAuthHeader(): String? {
         val username = getLoginName() ?: return null
         val password = getAppPassword() ?: return null
@@ -63,5 +73,6 @@ class SecurePreferencesManager(context: Context) {
         private const val KEY_SERVER_URL = "server_url"
         private const val KEY_LOGIN_NAME = "login_name"
         private const val KEY_APP_PASSWORD = "app_password"
+        private const val KEY_MUSIC_FOLDER = "music_folder"
     }
 }

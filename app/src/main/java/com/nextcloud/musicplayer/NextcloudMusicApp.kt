@@ -64,14 +64,19 @@ class NextcloudMusicApp : Application(), ImageLoaderFactory {
         database = AppDatabase.getInstance(this)
         musicRepository = MusicRepository(webDavClient, database, securePreferencesManager)
 
-        playbackCacheManager = PlaybackCacheManager.getInstance(this, authenticatedOkHttpClient)
-        playerController = PlayerController(this)
+        playbackCacheManager = PlaybackCacheManager.getInstance(
+            this,
+            authenticatedOkHttpClient,
+            securePreferencesManager
+        )
+
+        playerController = PlayerController(this, musicRepository)
         playerController.connect()
     }
 
     override fun newImageLoader(): ImageLoader {
         return ImageLoader.Builder(this)
-            .okHttpClient(authenticatedOkHttpClient) // Essential: Authenticated requests for WebDAV cover art!
+            .okHttpClient(authenticatedOkHttpClient)
             .memoryCache {
                 MemoryCache.Builder(this)
                     .maxSizePercent(0.25)
@@ -80,7 +85,7 @@ class NextcloudMusicApp : Application(), ImageLoaderFactory {
             .diskCache {
                 DiskCache.Builder()
                     .directory(cacheDir.resolve("image_cache"))
-                    .maxSizeBytes(100L * 1024L * 1024L) // 100 MB cover art disk cache
+                    .maxSizeBytes(100L * 1024L * 1024L)
                     .build()
             }
             .respectCacheHeaders(false)

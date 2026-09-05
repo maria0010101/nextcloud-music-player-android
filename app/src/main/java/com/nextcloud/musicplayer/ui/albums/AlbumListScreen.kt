@@ -9,6 +9,8 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
+import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -20,6 +22,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.nextcloud.musicplayer.data.local.entity.AlbumEntity
+import com.nextcloud.musicplayer.ui.folder.FolderPickerDialog
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -33,8 +36,21 @@ fun AlbumListScreen(
     val isSyncing by viewModel.isSyncing.collectAsState()
     val syncMessage by viewModel.syncMessage.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
+    val selectedFolder by viewModel.selectedFolder.collectAsState()
 
     var showLogoutDialog by remember { mutableStateOf(false) }
+    var showFolderPicker by remember { mutableStateOf(false) }
+
+    if (showFolderPicker) {
+        FolderPickerDialog(
+            initialFolder = selectedFolder,
+            repository = viewModel.repository,
+            onFolderSelected = { chosenFolder ->
+                viewModel.updateSelectedFolder(chosenFolder)
+            },
+            onDismiss = { showFolderPicker = false }
+        )
+    }
 
     if (showLogoutDialog) {
         AlertDialog(
@@ -76,15 +92,19 @@ fun AlbumListScreen(
                         }
                     }
 
+                    IconButton(onClick = { showFolderPicker = true }) {
+                        Icon(Icons.Default.CreateNewFolder, contentDescription = "指定音樂資料夾")
+                    }
+
                     IconButton(onClick = { viewModel.toggleGridMode() }) {
                         Icon(
-                            if (isGridMode) Icons.Default.ViewList else Icons.Default.GridView,
+                            if (isGridMode) Icons.AutoMirrored.Filled.ViewList else Icons.Default.GridView,
                             contentDescription = "切換檢視"
                         )
                     }
 
                     IconButton(onClick = { showLogoutDialog = true }) {
-                        Icon(Icons.Default.ExitToApp, contentDescription = "登出")
+                        Icon(Icons.AutoMirrored.Filled.ExitToApp, contentDescription = "登出")
                     }
                 }
             )
@@ -95,6 +115,41 @@ fun AlbumListScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
+            // Selected Folder Banner
+            Surface(
+                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { showFolderPicker = true }
+                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.FolderOpen,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    val displayFolder = if (selectedFolder.isEmpty()) "根目錄 (/)" else "/$selectedFolder"
+                    Text(
+                        text = "掃描目錄: $displayFolder",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Text(
+                        text = "變更",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+
             // Search Bar
             OutlinedTextField(
                 value = searchQuery,
@@ -111,7 +166,7 @@ fun AlbumListScreen(
                 singleLine = true,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
             )
 
             // Sync status banner
@@ -157,23 +212,31 @@ fun AlbumListScreen(
                         )
                         Spacer(modifier = Modifier.height(16.dp))
                         Text(
-                            text = if (searchQuery.isNotEmpty()) "查無相關專輯" else "音樂庫目前為空",
+                            text = if (searchQuery.isNotEmpty()) "查無相關專輯" else "目前目錄未發現音樂",
                             style = MaterialTheme.typography.titleMedium
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = "請點擊右上角同步按鈕，自動掃描 Nextcloud 上的音樂資料夾與曲目",
+                            text = "可點擊上方「變更」按鈕選定包含音樂檔案的 Nextcloud 目錄 (例如 /Music)，再執行掃描",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Spacer(modifier = Modifier.height(16.dp))
-                        Button(
-                            onClick = { viewModel.syncLibrary() },
-                            enabled = !isSyncing
-                        ) {
-                            Icon(Icons.Default.Sync, contentDescription = null)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("立即掃描 WebDAV")
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Button(onClick = { showFolderPicker = true }) {
+                                Icon(Icons.Default.Folder, contentDescription = null)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("選擇資料夾")
+                            }
+
+                            OutlinedButton(
+                                onClick = { viewModel.syncLibrary() },
+                                enabled = !isSyncing
+                            ) {
+                                Icon(Icons.Default.Sync, contentDescription = null)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("立即掃描")
+                            }
                         }
                     }
                 }
