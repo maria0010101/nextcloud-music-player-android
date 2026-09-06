@@ -43,9 +43,11 @@ fun AlbumListScreen(
     val coroutineScope = rememberCoroutineScope()
 
     Scaffold(
+        contentWindowInsets = WindowInsets(0.dp),
         topBar = {
             TopAppBar(
                 title = { Text("Nextcloud 音樂庫") },
+                windowInsets = WindowInsets(0.dp),
                 actions = {
                     IconButton(
                         onClick = { viewModel.syncLibrary() },
