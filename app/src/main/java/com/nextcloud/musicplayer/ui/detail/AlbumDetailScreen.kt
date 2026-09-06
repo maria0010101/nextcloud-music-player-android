@@ -17,6 +17,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
@@ -34,6 +35,9 @@ fun AlbumDetailScreen(
     val tracks by viewModel.tracks.collectAsState()
     val downloadStatus by viewModel.downloadStatus.collectAsState()
     var showCoverSearchSheet by remember { mutableStateOf(false) }
+
+    val currentTrack by viewModel.playerController.currentTrack.collectAsState()
+    val isPlaying by viewModel.playerController.isPlaying.collectAsState()
 
     LaunchedEffect(Unit) {
         viewModel.observeDownloadProgress(context)
@@ -72,20 +76,35 @@ fun AlbumDetailScreen(
                         .padding(20.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    AsyncImage(
-                        model = album?.coverUrl,
-                        contentDescription = album?.name,
-                        contentScale = ContentScale.Crop,
+                    Box(
                         modifier = Modifier
-                            .size(200.dp)
+                            .size(180.dp)
                             .clip(RoundedCornerShape(16.dp))
-                    )
+                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (!album?.coverUrl.isNullOrBlank()) {
+                            AsyncImage(
+                                model = album?.coverUrl,
+                                contentDescription = album?.name,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.Album,
+                                contentDescription = null,
+                                modifier = Modifier.size(80.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
 
                     Spacer(modifier = Modifier.height(16.dp))
 
                     Text(
-                        text = album?.name ?: "",
-                        style = MaterialTheme.typography.titleLarge,
+                        text = album?.name ?: "未知專輯",
+                        style = MaterialTheme.typography.headlineSmall,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -178,9 +197,11 @@ fun AlbumDetailScreen(
 
             // Track Items
             itemsIndexed(tracks, key = { _, track -> track.id }) { index, track ->
+                val isCurrentTrack = currentTrack?.id == track.id
                 TrackListItem(
                     index = index + 1,
                     track = track,
+                    isPlaying = isCurrentTrack && isPlaying,
                     onClick = { viewModel.playTrack(index) }
                 )
             }
@@ -201,13 +222,18 @@ fun AlbumDetailScreen(
 fun TrackListItem(
     index: Int,
     track: TrackEntity,
+    isPlaying: Boolean = false,
     onClick: () -> Unit
 ) {
     Surface(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick),
-        color = MaterialTheme.colorScheme.surface
+        color = if (isPlaying) {
+            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+        } else {
+            MaterialTheme.colorScheme.surface
+        }
     ) {
         Row(
             modifier = Modifier
@@ -219,16 +245,25 @@ fun TrackListItem(
                 modifier = Modifier
                     .size(32.dp)
                     .background(
-                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        color = if (isPlaying) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
                         shape = CircleShape
                     ),
                 contentAlignment = Alignment.Center
             ) {
-                Text(
-                    text = index.toString(),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                if (isPlaying) {
+                    Icon(
+                        imageVector = Icons.Default.GraphicEq,
+                        contentDescription = "播放中",
+                        tint = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                } else {
+                    Text(
+                        text = index.toString(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.width(14.dp))
@@ -238,6 +273,8 @@ fun TrackListItem(
                     Text(
                         text = track.title,
                         style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = if (isPlaying) FontWeight.Bold else null,
+                        color = if (isPlaying) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false)
@@ -288,8 +325,8 @@ fun TrackListItem(
 
             IconButton(onClick = onClick) {
                 Icon(
-                    imageVector = Icons.Default.PlayCircleOutline,
-                    contentDescription = "播放",
+                    imageVector = if (isPlaying) Icons.Default.GraphicEq else Icons.Default.PlayCircleOutline,
+                    contentDescription = if (isPlaying) "現正播放" else "播放",
                     tint = MaterialTheme.colorScheme.primary
                 )
             }

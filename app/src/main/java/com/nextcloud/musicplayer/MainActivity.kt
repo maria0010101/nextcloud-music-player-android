@@ -7,32 +7,15 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.consumeWindowInsets
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.*
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi
+import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
 import androidx.compose.runtime.*
-import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
-import androidx.navigation.NavType
-import androidx.navigation.compose.NavHost
-import androidx.navigation.compose.composable
-import androidx.navigation.compose.rememberNavController
-import androidx.navigation.navArgument
-import com.nextcloud.musicplayer.ui.albums.AlbumListScreen
-import com.nextcloud.musicplayer.ui.albums.AlbumListViewModel
+import com.nextcloud.musicplayer.ui.adaptive.AdaptiveHomeScreen
 import com.nextcloud.musicplayer.ui.auth.LoginScreen
 import com.nextcloud.musicplayer.ui.auth.LoginViewModel
-import com.nextcloud.musicplayer.ui.detail.AlbumDetailScreen
-import com.nextcloud.musicplayer.ui.detail.AlbumDetailViewModel
-import com.nextcloud.musicplayer.ui.player.MiniPlayerBar
-import com.nextcloud.musicplayer.ui.player.PlayerScreen
-import com.nextcloud.musicplayer.ui.settings.SettingsScreen
-import com.nextcloud.musicplayer.ui.settings.SettingsViewModel
 import com.nextcloud.musicplayer.ui.theme.NextcloudMusicTheme
-import java.net.URLDecoder
-import java.net.URLEncoder
 
 class MainActivity : ComponentActivity() {
 
@@ -40,7 +23,7 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestPermission()
     ) { _ -> }
 
-    @OptIn(ExperimentalMaterial3Api::class)
+    @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3WindowSizeClassApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -56,140 +39,34 @@ class MainActivity : ComponentActivity() {
         val app = application as NextcloudMusicApp
         val prefs = app.securePreferencesManager
         val loginFlowClient = app.loginFlowClient
-        val repository = app.musicRepository
-        val cacheManager = app.playbackCacheManager
-        val settingsDataStore = app.appSettingsDataStore
-        val playerController = app.playerController
-        val coverSearchRepo = app.coverSearchRepository
-        val coverManager = app.coverManager
-        val dataStoreManager = app.dataStoreManager
+
+        // 確保播放控制器保持連線
+        app.playerController.connect()
 
         setContent {
+            val windowSizeClass = calculateWindowSizeClass(this)
             NextcloudMusicTheme {
-                val navController = rememberNavController()
-                val snackbarHostState = remember { SnackbarHostState() }
-                val startDestination = if (prefs.hasCredentials()) "albums" else "login"
+                var isLoggedIn by remember { mutableStateOf(prefs.hasCredentials()) }
 
-                var isPlayerSheetVisible by remember { mutableStateOf(false) }
-                val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-
-                val playbackError by playerController.playbackError.collectAsState()
-                LaunchedEffect(playbackError) {
-                    playbackError?.let { err ->
-                        snackbarHostState.showSnackbar(err)
-                        playerController.clearPlaybackError()
-                    }
-                }
-
-                var currentRoute by remember { mutableStateOf(startDestination) }
-                LaunchedEffect(navController) {
-                    navController.addOnDestinationChangedListener { _, destination, _ ->
-                        currentRoute = destination.route ?: ""
-                    }
-                }
-
-                Box(modifier = Modifier.fillMaxSize()) {
-                    Scaffold(
-                        snackbarHost = { SnackbarHost(snackbarHostState) },
-                        bottomBar = {
-                            if (currentRoute.startsWith("albums") || currentRoute.startsWith("album_detail")) {
-                                MiniPlayerBar(
-                                    playerController = playerController,
-                                    onClick = { isPlayerSheetVisible = true }
-                                )
-                            }
+                if (isLoggedIn) {
+                    AdaptiveHomeScreen(
+                        widthSizeClass = windowSizeClass.widthSizeClass,
+                        app = app,
+                        onLogout = {
+                            prefs.clear()
+                            isLoggedIn = false
                         }
-                    ) { innerPadding ->
-                        NavHost(
-                            navController = navController,
-                            startDestination = startDestination,
-                            modifier = Modifier
-                                .padding(innerPadding)
-                                .consumeWindowInsets(innerPadding)
-                        ) {
-                            // 模組 1：精簡登入 (僅保留 Nextcloud 官方 Login Flow v2)
-                            composable("login") {
-                                val loginViewModel = remember {
-                                    LoginViewModel(prefs, loginFlowClient)
-                                }
-                                LoginScreen(
-                                    viewModel = loginViewModel,
-                                    onLoginSuccess = {
-                                        navController.navigate("albums") {
-                                            popUpTo("login") { inclusive = true }
-                                        }
-                                    }
-                                )
-                            }
-
-                            composable("albums") {
-                                val albumViewModel = remember {
-                                    AlbumListViewModel(repository, prefs)
-                                }
-                                AlbumListScreen(
-                                    viewModel = albumViewModel,
-                                    onAlbumClick = { albumId ->
-                                        val encoded = URLEncoder.encode(albumId, "UTF-8")
-                                        navController.navigate("album_detail/$encoded")
-                                    },
-                                    onOpenSettings = {
-                                        navController.navigate("settings")
-                                    }
-                                )
-                            }
-
-                            composable(
-                                route = "album_detail/{albumId}",
-                                arguments = listOf(navArgument("albumId") { type = NavType.StringType })
-                            ) { backStackEntry ->
-                                val rawId = backStackEntry.arguments?.getString("albumId") ?: ""
-                                val albumId = URLDecoder.decode(rawId, "UTF-8")
-                                val detailViewModel = remember(albumId) {
-                                    AlbumDetailViewModel(
-                                        albumId = albumId,
-                                        repository = repository,
-                                        playerController = playerController,
-                                        coverSearchRepository = coverSearchRepo,
-                                        coverManager = coverManager,
-                                        context = applicationContext
-                                    )
-                                }
-                                AlbumDetailScreen(
-                                    viewModel = detailViewModel,
-                                    onBack = { navController.popBackStack() }
-                                )
-                            }
-
-                            // 模組 4：獨立設定畫面 (SettingsScreen)
-                            composable("settings") {
-                                val settingsViewModel = remember {
-                                    SettingsViewModel(repository, prefs, settingsDataStore, cacheManager, dataStoreManager)
-                                }
-                                SettingsScreen(
-                                    viewModel = settingsViewModel,
-                                    onBack = { navController.popBackStack() },
-                                    onLogout = {
-                                        navController.navigate("login") {
-                                            popUpTo("albums") { inclusive = true }
-                                        }
-                                    }
-                                )
-                            }
-                        }
+                    )
+                } else {
+                    val loginViewModel = remember {
+                        LoginViewModel(prefs, loginFlowClient)
                     }
-
-                    // 模組 2 & 3：滑出式全螢幕播放視窗 (Bottom Sheet)
-                    if (isPlayerSheetVisible) {
-                        ModalBottomSheet(
-                            onDismissRequest = { isPlayerSheetVisible = false },
-                            sheetState = sheetState
-                        ) {
-                            PlayerScreen(
-                                playerController = playerController,
-                                onDismiss = { isPlayerSheetVisible = false }
-                            )
+                    LoginScreen(
+                        viewModel = loginViewModel,
+                        onLoginSuccess = {
+                            isLoggedIn = true
                         }
-                    }
+                    )
                 }
             }
         }
@@ -197,6 +74,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        (application as? NextcloudMusicApp)?.playerController?.disconnect()
+        // 僅在 Activity 真正關閉（非螢幕旋轉導致之重建）時釋放連線
+        if (isFinishing) {
+            (application as? NextcloudMusicApp)?.playerController?.disconnect()
+        }
     }
 }

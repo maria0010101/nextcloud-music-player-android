@@ -22,9 +22,9 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 class AlbumDetailViewModel(
-    private val albumId: String,
-    private val repository: MusicRepository,
-    private val playerController: PlayerController,
+    val albumId: String,
+    val repository: MusicRepository,
+    val playerController: PlayerController,
     private val coverSearchRepository: CoverSearchRepository? = null,
     private val coverManager: CoverManager? = null,
     context: Context? = null

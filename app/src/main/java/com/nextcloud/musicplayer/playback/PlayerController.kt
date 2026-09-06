@@ -68,15 +68,21 @@ class PlayerController(
     private var currentPlaylist = listOf<TrackEntity>()
     private var progressPollingJob: Job? = null
 
-    fun connect() {
-        if (mediaController != null || controllerFuture != null) return
+    fun connect(onConnected: ((MediaController) -> Unit)? = null) {
+        val current = mediaController
+        if (current != null) {
+            onConnected?.invoke(current)
+            return
+        }
 
-        val sessionToken = SessionToken(
-            context,
-            ComponentName(context, MusicPlaybackService::class.java)
-        )
+        if (controllerFuture == null || controllerFuture!!.isDone) {
+            val sessionToken = SessionToken(
+                context,
+                ComponentName(context, MusicPlaybackService::class.java)
+            )
+            controllerFuture = MediaController.Builder(context, sessionToken).buildAsync()
+        }
 
-        controllerFuture = MediaController.Builder(context, sessionToken).buildAsync()
         controllerFuture?.addListener({
             try {
                 val controller = controllerFuture?.get() ?: return@addListener
@@ -84,6 +90,7 @@ class PlayerController(
                 setupPlayerListener(controller)
                 updateStateFromPlayer(controller)
                 Log.d(TAG, "MediaController 已成功連線")
+                onConnected?.invoke(controller)
             } catch (e: Exception) {
                 Log.e(TAG, "MediaController 連線失敗", e)
             }
@@ -258,12 +265,23 @@ class PlayerController(
     }
 
     fun playTracks(tracks: List<TrackEntity>, startIndex: Int = 0, coverUrl: String? = null) {
-        val controller = mediaController ?: run {
-            Log.e(TAG, "mediaController is null, connect first")
+        if (tracks.isEmpty()) return
+        val controller = mediaController
+        if (controller == null) {
+            connect { readyController ->
+                executePlayTracks(readyController, tracks, startIndex, coverUrl)
+            }
             return
         }
-        if (tracks.isEmpty()) return
+        executePlayTracks(controller, tracks, startIndex, coverUrl)
+    }
 
+    private fun executePlayTracks(
+        controller: MediaController,
+        tracks: List<TrackEntity>,
+        startIndex: Int,
+        coverUrl: String?
+    ) {
         currentPlaylist = tracks
         val mediaItems = tracks.map { track ->
             val playbackUrl = track.playableUri
@@ -298,7 +316,10 @@ class PlayerController(
     }
 
     fun togglePlayPause() {
-        val controller = mediaController ?: return
+        val controller = mediaController ?: run {
+            connect { it.play() }
+            return
+        }
         if (controller.isPlaying) {
             controller.pause()
         } else {

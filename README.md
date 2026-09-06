@@ -24,6 +24,26 @@ Many private cloud music solutions require dedicated server-side extensions (suc
 
 ---
 
+## 🚀 What's New in v0.3
+
+- 🖥️ **Adaptive Multi-Pane Layout for Tablets & Large Screens (Three-Pane Architecture)**:
+  - Powered by `material3-window-size-class` (`WindowWidthSizeClass.Expanded` for widths ≥ 840dp).
+  - Automatically switches between the standard mobile phone view (single pane with expandable bottom player sheet) and an expansive horizontal 3-pane workstation view on tablets, foldables, and landscape screens:
+    - **Left Pane (Album List)**: Displays full album grid/list with draggable fast-scrollbar and selected album highlighting.
+    - **Middle Pane (Track List)**: Instant track listing for the selected album with batch offline download, cover art search/customization, and live playing track indicators.
+    - **Right Pane (Now Playing & Audio Specs)**: Permanent dedicated player featuring high-res album art, live stream telemetry (e.g., `FLAC • 96.0 kHz • 1024 kbps`), responsive playback controls, and buffer indicators.
+  - Seamless state hoisting and shared ViewModel lifecycle ensure playback and queue state persist during device rotation and fold/unfold transitions.
+- 📱 **Android 15 / Android 16 (API 35+) Edge-to-Edge System Insets Fix**:
+  - Eliminated redundant top status bar padding causing blank gaps on Android 15 / 16 preview environments.
+  - Ensures consistent visual alignment and edge-to-edge rendering across Android 8 through Android 16.
+- 🎨 **Full-Bleed Adaptive App Icon & Launcher Border Fix**:
+  - Replaced legacy solid slate/black adaptive icon background with a native vector linear gradient (`#22A2FC` to `#1852BC`, 270°).
+  - Optimized foreground safe-zone scaling to 92%, removing top black edge gap artifacts on OEM squircle and custom launcher masks (MIUI, HyperOS, OneUI, Pixel).
+- 🔄 **Player Lifecycle & Audio Focus Resilience**:
+  - Strengthened `PlayerController` reconnect routines and audio session state restoration across activity recreations.
+
+---
+
 ## 🚀 What's New in v0.2
 
 - 🔍 **Online Album Cover Search**: Integrated iTunes Search API for quick album artwork lookups with up to 600x600 resolution previews and keyword refinement.
@@ -80,8 +100,10 @@ Ensures artwork is always displayed using a 4-tier resolution pipeline:
 
 ### 🎨 Modern Material 3 UI & Navigation
 - **Jetpack Compose Architecture**: Fluid animations, dark/light theme support, and dynamic color adaptation.
+- **Adaptive Three-Pane Layout (New in v0.3)**: Responsive multi-column layout for tablets, foldables, and landscape orientations with real-time state synchronization.
 - **Fast-Scroll Alphabet Indicator**: Drag thumb with an interactive alphabet bubble for rapid browsing across extensive music libraries.
-- **Bottom Sliding Player Sheet**: Expandable now-playing sheet with playback queue management, shuffle, repeat, and volume control.
+- **Bottom Sliding Player Sheet**: Expandable now-playing sheet with playback queue management, shuffle, repeat, and volume control on phones.
+- **Full-Bleed Adaptive App Icon (New in v0.3)**: High-resolution adaptive icon with seamless linear gradient background across all Android launcher shapes.
 - **System Integration**: Background `MediaSessionService` supporting lock screen controls, notification actions, Bluetooth AVRCP metadata sync, and auto-pause on headphone disconnection.
 
 ---
@@ -90,7 +112,7 @@ Ensures artwork is always displayed using a 4-tier resolution pipeline:
 
 | Layer | Technologies |
 |---|---|
-| **UI & Presentation** | Jetpack Compose, Material 3, Navigation Compose, Compose ViewModels |
+| **UI & Presentation** | Jetpack Compose, Material 3, Material 3 WindowSizeClass, Navigation Compose |
 | **Architecture Pattern** | MVVM + Clean Architecture, Kotlin Coroutines, StateFlow / SharedFlow |
 | **Audio Engine** | AndroidX Media3 (ExoPlayer), MediaSessionService, MediaNotificationManager |
 | **Networking & Protocols** | OkHttp 4, WebDAV (`PROPFIND`, `GET`, `PUT`, `HEAD`), Nextcloud Login Flow v2 |
@@ -106,13 +128,13 @@ Ensures artwork is always displayed using a 4-tier resolution pipeline:
 ## 🚀 Getting Started
 
 ### Prerequisites
-- An Android device running **Android 8.0 (Oreo / API Level 26)** or higher.
+- An Android device running **Android 8.0 (Oreo / API Level 26)** or higher (fully tested on Android 14, 15, and 16).
 - A running **Nextcloud instance** (version 20+ recommended) with WebDAV access enabled.
 - A music folder stored on your Nextcloud instance (e.g., `Music/`).
 
 ### Download
 You can download the pre-compiled, signed APK directly from GitHub Releases:
-- 👉 **[Download NextcloudPlayer-v0.2.apk](https://github.com/maria0010101/nextcloud-music-player-android/releases/latest)**
+- 👉 **[Download NextcloudPlayer-v0.3.apk](https://github.com/maria0010101/nextcloud-music-player-android/releases/latest)**
 
 ---
 
