@@ -97,4 +97,52 @@ class NextcloudWebDavClient(
             "$base/$pathOrHref"
         }
     }
+
+    suspend fun uploadAlbumCover(
+        remoteFolderPath: String,
+        imageBytes: ByteArray
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val server = prefsManager.getServerUrl()?.removeSuffix("/")
+                ?: return@withContext Result.failure(IllegalStateException("未設定 Nextcloud 伺服器網址"))
+            val username = prefsManager.getLoginName()
+                ?: return@withContext Result.failure(IllegalStateException("未設定 Nextcloud 帳號"))
+            val webDavBase = "$server/remote.php/dav/files/$username"
+
+            val targetUrl = if (remoteFolderPath.startsWith("http://") || remoteFolderPath.startsWith("https://")) {
+                "${remoteFolderPath.trimEnd('/')}/cover.jpg"
+            } else {
+                val cleanRel = remoteFolderPath.trim().trim('/')
+                if (cleanRel.startsWith("remote.php/dav/files/$username/", ignoreCase = true)) {
+                    "$server/${cleanRel.trimEnd('/')}/cover.jpg"
+                } else {
+                    "$webDavBase/$cleanRel/cover.jpg"
+                }
+            }
+
+            val requestBody = imageBytes.toRequestBody("image/jpeg".toMediaType())
+            val requestBuilder = Request.Builder()
+                .url(targetUrl)
+                .put(requestBody)
+                .header("Content-Type", "image/jpeg")
+
+            prefsManager.getBasicAuthHeader()?.let { auth ->
+                requestBuilder.header("Authorization", auth)
+            }
+
+            val request = requestBuilder.build()
+            val response = okHttpClient.newCall(request).execute()
+
+            if (response.isSuccessful || response.code in 200..204) {
+                Result.success(Unit)
+            } else {
+                Result.failure(IOException("WebDAV PUT failed HTTP ${response.code}: ${response.message}"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
 }
+
+typealias WebDavClient = NextcloudWebDavClient
+

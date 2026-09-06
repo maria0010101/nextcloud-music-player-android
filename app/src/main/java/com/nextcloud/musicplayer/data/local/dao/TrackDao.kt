@@ -27,6 +27,9 @@ interface TrackDao {
     @Query("UPDATE tracks SET isDownloaded = 1, localFilePath = :localFilePath WHERE id = :trackId")
     suspend fun markTrackDownloaded(trackId: String, localFilePath: String): Int
 
+    @Query("UPDATE tracks SET coverUrl = :coverUrl WHERE albumId = :albumId")
+    suspend fun updateCoverForAlbumTracks(albumId: String, coverUrl: String?): Int
+
     @Query("DELETE FROM tracks WHERE albumId = :albumId")
     suspend fun deleteTracksByAlbum(albumId: String): Int
 

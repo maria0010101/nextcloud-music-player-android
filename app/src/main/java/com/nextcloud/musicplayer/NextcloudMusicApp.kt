@@ -47,11 +47,21 @@ class NextcloudMusicApp : Application(), ImageLoaderFactory {
     lateinit var playerController: PlayerController
         private set
 
+    lateinit var coverSearchRepository: com.nextcloud.musicplayer.data.repository.CoverSearchRepository
+        private set
+
+    lateinit var coverManager: com.nextcloud.musicplayer.data.repository.CoverManager
+        private set
+
+    lateinit var dataStoreManager: com.nextcloud.musicplayer.core.settings.DataStoreManager
+        private set
+
     override fun onCreate() {
         super.onCreate()
 
         securePreferencesManager = SecurePreferencesManager(this)
         appSettingsDataStore = AppSettingsDataStore(this)
+        dataStoreManager = com.nextcloud.musicplayer.core.settings.DataStoreManager(this)
 
         val logging = HttpLoggingInterceptor().apply {
             level = HttpLoggingInterceptor.Level.BASIC
@@ -68,6 +78,8 @@ class NextcloudMusicApp : Application(), ImageLoaderFactory {
         loginFlowClient = LoginFlowV2Client(authenticatedOkHttpClient)
         database = AppDatabase.getInstance(this)
         musicRepository = MusicRepository(webDavClient, database, securePreferencesManager, this, appSettingsDataStore)
+        coverSearchRepository = com.nextcloud.musicplayer.data.repository.CoverSearchRepository()
+        coverManager = com.nextcloud.musicplayer.data.repository.CoverManager(this, webDavClient, database)
 
         playbackCacheManager = PlaybackCacheManager.getInstance(
             this,

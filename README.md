@@ -17,10 +17,25 @@ A modern, native, and lightweight Android music streaming and offline playback a
 Many private cloud music solutions require dedicated server-side extensions (such as Subsonic, Ampache, or Audio Player apps) that continuously index libraries or perform heavy real-time transcoding.
 
 **Nextcloud WebDAV Music Player** takes an elegant, server-agnostic approach:
-- **Direct WebDAV Interaction**: Utilizes native Nextcloud WebDAV endpoints (`PROPFIND`, HTTP range `GET`) for folder discovery and progressive streaming.
+- **Direct WebDAV Interaction**: Utilizes native Nextcloud WebDAV endpoints (`PROPFIND`, HTTP range `GET`, `PUT`) for folder discovery, progressive streaming, and cover management.
 - **Client-Side Decoding**: Powered by AndroidX Media3 (ExoPlayer), decoding FLAC, MP3, AAC, OGG, WAV, ALAC, and Opus right on your phone.
 - **Smart Metadata & Image Resolution**: Dynamically discovers album structures and cover art without requiring server modifications.
 - **Low Overhead**: Enjoy your private lossless music collection anywhere without heating up your home server or NAS.
+
+---
+
+## 🚀 What's New in v0.2
+
+- 🔍 **Online Album Cover Search**: Integrated iTunes Search API for quick album artwork lookups with up to 600x600 resolution previews and keyword refinement.
+- ☁️ **Dual Cover Storage Modes**:
+  - **Write to Cloud (Nextcloud WebDAV PUT)**: Uploads `cover.jpg` to the server and syncs the library across devices.
+  - **Local Only**: Saves custom cover art to app-private storage without modifying remote cloud files.
+- 🛡️ **Scan Conflict Protection**: Flagged with `isCustomLocalCover`, protecting personalized artwork from being overwritten during future library rescans.
+- 📂 **Custom Offline Download Storage Location**:
+  - Storage Access Framework (SAF) integration via `OpenDocumentTree`.
+  - Save downloaded albums to public device directories (`/Music`) or external SD cards with persistable URI permissions.
+  - Dual writing architecture supporting standard Java `File` and AndroidX `DocumentFile` streaming.
+  - Offline tracks and embedded `cover.jpg` organized in dedicated album subfolders.
 
 ---
 
@@ -37,6 +52,11 @@ Many private cloud music solutions require dedicated server-side extensions (suc
 - **Real-Time Audio Specs**: Displays live stream diagnostics in the player, including sample rate, bitrate, and format tag (e.g., `FLAC • 96.0 kHz • 1024 kbps`).
 - **Comprehensive Format Support**: Seamless playback of Lossless FLAC, ALAC, WAV, MP3, AAC, OGG Vorbis, and Opus.
 
+### 🔍 Online Cover Search & Dual Storage (New in v0.2)
+- **iTunes Search API Integration**: Discover candidate album covers with instant thumbnail grids and editable search keywords.
+- **Write to Cloud vs. Local Only**: Choose between uploading `cover.jpg` directly to Nextcloud via WebDAV `PUT` or storing locally in app-private storage.
+- **Rescan Protection**: Never lose custom covers during library syncs thanks to database-level protection flags (`isCustomLocalCover`).
+
 ### 📁 Smart Album Hierarchy & Path Mapping
 - **Directory-Based Organization**: Intelligently aggregates your audio folders into albums.
 - **Configurable Hierarchy Levels (1–5)**: Tailor how directory paths are mapped to album titles using custom separator depths (`-`). Handles nested multi-disc albums (`Artist - Year - Album - CD1`) gracefully.
@@ -52,9 +72,11 @@ Ensures artwork is always displayed using a 4-tier resolution pipeline:
 - **Customizable Cache Bounds**: User-configurable audio cache buffer (128 MB to 2 GB) managed with an LRU (Least Recently Used) eviction policy.
 - **Smooth Scrubbing**: Cached chunks ensure zero lag when skipping forward or rewinding tracks.
 
-### 📥 Background Offline Mode
-- **WorkManager Download Integration**: Download entire albums or individual tracks for offline listening while traveling or in low-connectivity environments.
-- **Foreground Service Transparency**: Persistent background progress notifications with full progress feedback.
+### 📥 Background Offline Mode & Custom Storage (New in v0.2)
+- **Custom Download Location**: Save albums to internal app storage, public storage (`/Music`), or external SD cards via Storage Access Framework (SAF).
+- **Persistable Permissions**: Retains folder access permissions across reboots using `takePersistableUriPermission`.
+- **WorkManager Download Integration**: Foreground download service with real-time percentage notifications.
+- **Seamless Offline Playback**: Direct playback from local files or SAF `content://` URIs without network access.
 
 ### 🎨 Modern Material 3 UI & Navigation
 - **Jetpack Compose Architecture**: Fluid animations, dark/light theme support, and dynamic color adaptation.
@@ -71,10 +93,11 @@ Ensures artwork is always displayed using a 4-tier resolution pipeline:
 | **UI & Presentation** | Jetpack Compose, Material 3, Navigation Compose, Compose ViewModels |
 | **Architecture Pattern** | MVVM + Clean Architecture, Kotlin Coroutines, StateFlow / SharedFlow |
 | **Audio Engine** | AndroidX Media3 (ExoPlayer), MediaSessionService, MediaNotificationManager |
-| **Networking & Protocols** | OkHttp 4, WebDAV (`PROPFIND`, `GET`, `HEAD`), Nextcloud Login Flow v2 |
+| **Networking & Protocols** | OkHttp 4, WebDAV (`PROPFIND`, `GET`, `PUT`, `HEAD`), Nextcloud Login Flow v2 |
 | **Local Persistence** | AndroidX Room (SQLite ORM) for library metadata & offline status; Jetpack DataStore |
+| **Storage & I/O** | Android Storage Access Framework (SAF), AndroidX DocumentFile, Scoped Storage |
 | **Security** | AndroidX Security Crypto (`EncryptedSharedPreferences`, MasterKeys) |
-| **Image Loading** | Coil 3 (Compose integration with WebDAV authenticated headers) |
+| **Image Loading** | Coil 2.7 (Compose integration with WebDAV authenticated headers & memory/disk cache management) |
 | **Background Tasks** | AndroidX WorkManager with Foreground Service support |
 | **Vision & Scanning** | AndroidX CameraX, Google ML Kit Barcode Scanning |
 
@@ -89,7 +112,7 @@ Ensures artwork is always displayed using a 4-tier resolution pipeline:
 
 ### Download
 You can download the pre-compiled, signed APK directly from GitHub Releases:
-- 👉 **[Download NextcloudPlayer-v0.1.apk](https://github.com/maria0010101/nextcloud-music-player-android/releases/latest)**
+- 👉 **[Download NextcloudPlayer-v0.2.apk](https://github.com/maria0010101/nextcloud-music-player-android/releases/latest)**
 
 ---
 
@@ -129,7 +152,8 @@ To compile and build the application yourself:
 2. **Select Music Directory**: Choose the root folder where your audio files are stored.
 3. **Sync Library**: Tap the sync button to scan folders via WebDAV. The app will organize tracks into albums and fetch cover art.
 4. **Customize Hierarchy**: In Settings, adjust the Album Hierarchy Depth (1–5 levels) to fit your preferred directory naming conventions.
-5. **Stream & Download**: Tap any track or album to stream immediately. Long-press or tap the download button to save music locally for offline playback.
+5. **Search & Update Covers**: In Album Details, tap "線上搜尋/更換封面" to search iTunes for high-res artwork, then choose "寫回雲端" (Sync to Nextcloud) or "僅本機顯示" (Local Only).
+6. **Set Download Path & Offline Listening**: In Settings, choose your preferred download directory (SAF public storage or app internal). Tap "下載整張專輯" to download for offline listening.
 
 ---
 

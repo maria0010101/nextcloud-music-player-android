@@ -59,6 +59,9 @@ class MainActivity : ComponentActivity() {
         val cacheManager = app.playbackCacheManager
         val settingsDataStore = app.appSettingsDataStore
         val playerController = app.playerController
+        val coverSearchRepo = app.coverSearchRepository
+        val coverManager = app.coverManager
+        val dataStoreManager = app.dataStoreManager
 
         setContent {
             NextcloudMusicTheme {
@@ -139,7 +142,14 @@ class MainActivity : ComponentActivity() {
                                 val rawId = backStackEntry.arguments?.getString("albumId") ?: ""
                                 val albumId = URLDecoder.decode(rawId, "UTF-8")
                                 val detailViewModel = remember(albumId) {
-                                    AlbumDetailViewModel(albumId, repository, playerController, applicationContext)
+                                    AlbumDetailViewModel(
+                                        albumId = albumId,
+                                        repository = repository,
+                                        playerController = playerController,
+                                        coverSearchRepository = coverSearchRepo,
+                                        coverManager = coverManager,
+                                        context = applicationContext
+                                    )
                                 }
                                 AlbumDetailScreen(
                                     viewModel = detailViewModel,
@@ -150,7 +160,7 @@ class MainActivity : ComponentActivity() {
                             // 模組 4：獨立設定畫面 (SettingsScreen)
                             composable("settings") {
                                 val settingsViewModel = remember {
-                                    SettingsViewModel(repository, prefs, settingsDataStore, cacheManager)
+                                    SettingsViewModel(repository, prefs, settingsDataStore, cacheManager, dataStoreManager)
                                 }
                                 SettingsScreen(
                                     viewModel = settingsViewModel,

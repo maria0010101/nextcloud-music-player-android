@@ -33,6 +33,7 @@ fun AlbumDetailScreen(
     val album by viewModel.album.collectAsState()
     val tracks by viewModel.tracks.collectAsState()
     val downloadStatus by viewModel.downloadStatus.collectAsState()
+    var showCoverSearchSheet by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         viewModel.observeDownloadProgress(context)
@@ -45,6 +46,11 @@ fun AlbumDetailScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { showCoverSearchSheet = true }) {
+                        Icon(Icons.Default.ImageSearch, contentDescription = "線上搜尋封面")
                     }
                 }
             )
@@ -89,6 +95,23 @@ fun AlbumDetailScreen(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // 模組 4：觸發入口 - 線上搜尋/更換封面按鈕
+                    OutlinedButton(
+                        onClick = { showCoverSearchSheet = true },
+                        shape = RoundedCornerShape(20.dp),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ImageSearch,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("線上搜尋/更換封面", style = MaterialTheme.typography.labelLarge)
+                    }
 
                     Spacer(modifier = Modifier.height(16.dp))
 
@@ -160,6 +183,15 @@ fun AlbumDetailScreen(
                 )
             }
         }
+    }
+
+    // 模組 4：線上搜尋與更換封面 BottomSheet
+    if (showCoverSearchSheet) {
+        CoverSearchBottomSheet(
+            initialQuery = album?.name ?: "",
+            onDismissRequest = { showCoverSearchSheet = false },
+            viewModel = viewModel
+        )
     }
 }
 

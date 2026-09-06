@@ -23,12 +23,18 @@ data class TrackEntity(
     val isDownloaded: Boolean = false,
     val localFilePath: String? = null
 ) {
+    val localUri: String? get() = localFilePath
+
     /**
-     * 播放路徑：若本機檔案存在且已下載完成，優先使用本機 file:// URI，實現離線播放
+     * 模組 4：離線播放本機路徑索引
+     * 若本機檔案存在且已下載完成，優先使用本機 file:// 或 SAF content:// URI，實現完全離線播放
      */
     val playableUri: String
         get() {
             if (isDownloaded && !localFilePath.isNullOrBlank()) {
+                if (localFilePath.startsWith("content://")) {
+                    return localFilePath
+                }
                 val file = java.io.File(localFilePath)
                 if (file.exists() && file.length() > 0) {
                     return android.net.Uri.fromFile(file).toString()

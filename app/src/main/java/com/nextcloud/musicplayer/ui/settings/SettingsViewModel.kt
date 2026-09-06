@@ -1,15 +1,19 @@
 package com.nextcloud.musicplayer.ui.settings
 
+import android.content.Context
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.nextcloud.musicplayer.core.security.SecurePreferencesManager
 import com.nextcloud.musicplayer.core.settings.AppSettingsDataStore
+import com.nextcloud.musicplayer.core.settings.DataStoreManager
 import com.nextcloud.musicplayer.data.repository.MusicRepository
 import com.nextcloud.musicplayer.playback.PlaybackCacheManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -17,7 +21,8 @@ class SettingsViewModel(
     val repository: MusicRepository,
     private val prefsManager: SecurePreferencesManager,
     private val settingsDataStore: AppSettingsDataStore,
-    private val cacheManager: PlaybackCacheManager
+    private val cacheManager: PlaybackCacheManager,
+    private val dataStoreManager: DataStoreManager? = null
 ) : ViewModel() {
 
     val musicFolder: StateFlow<String> = settingsDataStore.musicFolder
@@ -28,6 +33,10 @@ class SettingsViewModel(
 
     val albumNameLevels: StateFlow<Set<Int>> = settingsDataStore.albumNameLevels
         .stateIn(viewModelScope, SharingStarted.Lazily, AppSettingsDataStore.DEFAULT_ALBUM_NAME_LEVELS)
+
+    // 模組 2：離線下載 SAF 目錄 URI
+    val downloadStorageUri: StateFlow<String?> = (dataStoreManager?.downloadStorageUri ?: flowOf(null))
+        .stateIn(viewModelScope, SharingStarted.Lazily, null)
 
     private val _usedCacheBytes = MutableStateFlow(cacheManager.getCacheSizeBytes())
     val usedCacheBytes: StateFlow<Long> = _usedCacheBytes.asStateFlow()
@@ -56,6 +65,38 @@ class SettingsViewModel(
             prefsManager.saveSelectedMusicFolder(clean)
             rescanLibrary()
         }
+    }
+
+    /**
+     * 模組 1 & 2：更新離線下載 SAF 目錄並保存持久化讀寫授權
+     */
+    fun updateDownloadStorageUri(context: Context, uri: Uri) {
+        val manager = dataStoreManager ?: DataStoreManager(context)
+        manager.takePersistableUriPermission(uri)
+        viewModelScope.launch {
+            manager.saveDownloadStorageUri(uri.toString())
+        }
+    }
+
+    /**
+     * 模組 2：恢復預設離線下載目錄 (App 專屬外部空間)
+     */
+    fun resetDownloadStorageUri(context: Context) {
+        val currentUriStr = downloadStorageUri.value
+        val manager = dataStoreManager ?: DataStoreManager(context)
+        if (!currentUriStr.isNullOrBlank()) {
+            try {
+                manager.releasePersistableUriPermission(Uri.parse(currentUriStr))
+            } catch (_: Exception) {}
+        }
+        viewModelScope.launch {
+            manager.saveDownloadStorageUri(null)
+        }
+    }
+
+    fun formatDownloadStorageLocation(context: Context, uriString: String?): String {
+        val manager = dataStoreManager ?: DataStoreManager(context)
+        return manager.formatStorageLocation(uriString)
     }
 
     /**

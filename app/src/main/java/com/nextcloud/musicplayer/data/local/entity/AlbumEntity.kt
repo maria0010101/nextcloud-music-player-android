@@ -9,7 +9,11 @@ data class AlbumEntity(
     val name: String,
     val remotePath: String,
     val coverUrl: String?,
+    val isCustomLocalCover: Boolean = false,
     val trackCount: Int = 0,
     val isDownloaded: Boolean = false,
     val updatedAt: Long = System.currentTimeMillis()
-)
+) {
+    val coverUri: String? get() = coverUrl
+}
+

@@ -1,5 +1,8 @@
 package com.nextcloud.musicplayer.ui.settings
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -13,6 +16,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.nextcloud.musicplayer.ui.folder.FolderPickerDialog
 
@@ -23,12 +27,22 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onLogout: () -> Unit
 ) {
+    val context = LocalContext.current
     val musicFolder by viewModel.musicFolder.collectAsState()
     val albumNameLevels by viewModel.albumNameLevels.collectAsState()
     val cacheMaxBytes by viewModel.cacheMaxSizeBytes.collectAsState()
     val usedCacheBytes by viewModel.usedCacheBytes.collectAsState()
+    val downloadStorageUri by viewModel.downloadStorageUri.collectAsState()
     val isSyncing by viewModel.isSyncing.collectAsState()
     val syncMessage by viewModel.syncMessage.collectAsState()
+
+    val openDocumentTreeLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            viewModel.updateDownloadStorageUri(context, uri)
+        }
+    }
 
     var showFolderPicker by remember { mutableStateOf(false) }
     var showLogoutDialog by remember { mutableStateOf(false) }
@@ -284,7 +298,73 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(28.dp))
 
-            // 3. 帳號與連線資訊
+            // 4. 離線下載儲存設定 (模組 1 & 2)
+            Text(
+                text = "離線下載儲存設定",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("下載檔案存放目錄", style = MaterialTheme.typography.labelMedium)
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    val displayLocation = viewModel.formatDownloadStorageLocation(context, downloadStorageUri)
+                    Text(
+                        text = displayLocation,
+                        style = MaterialTheme.typography.titleMedium
+                    )
+
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = if (downloadStorageUri.isNullOrBlank()) {
+                            "目前使用 App 專屬外部空間，解除安裝時檔案會被清除。可自訂至手機公開 Music 資料夾或 SD 卡。"
+                        } else {
+                            "已設定自訂 SAF 目錄並取得持久化讀寫授權，App 解除安裝後檔案仍會永久保留於裝置中。"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Button(
+                            onClick = { openDocumentTreeLauncher.launch(null) },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Icon(Icons.Default.FolderSpecial, contentDescription = null)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("更改目錄")
+                        }
+
+                        OutlinedButton(
+                            onClick = { viewModel.resetDownloadStorageUri(context) },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(8.dp),
+                            enabled = !downloadStorageUri.isNullOrBlank()
+                        ) {
+                            Icon(Icons.Default.Restore, contentDescription = null)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("恢復預設")
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(28.dp))
+
+            // 5. 帳號與連線資訊
             Text(
                 text = "Nextcloud 伺服器資訊",
                 style = MaterialTheme.typography.titleMedium,

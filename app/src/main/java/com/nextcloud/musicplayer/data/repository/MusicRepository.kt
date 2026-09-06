@@ -66,6 +66,14 @@ class MusicRepository(
     suspend fun getAlbumById(albumId: String): AlbumEntity? =
         database.albumDao().getAlbumById(albumId)
 
+    fun observeAlbumById(albumId: String): Flow<AlbumEntity?> =
+        database.albumDao().observeAlbumById(albumId)
+
+    suspend fun updateAlbumCover(albumId: String, coverUrl: String?, isCustomLocalCover: Boolean) = withContext(Dispatchers.IO) {
+        database.albumDao().updateAlbumCover(albumId, coverUrl, isCustomLocalCover)
+        database.trackDao().updateCoverForAlbumTracks(albumId, coverUrl)
+    }
+
     suspend fun updateTrackDuration(trackIdOrUrl: String, durationMs: Long) = withContext(Dispatchers.IO) {
         if (durationMs > 0) {
             database.trackDao().updateDuration(trackIdOrUrl, durationMs)
@@ -278,6 +286,7 @@ class MusicRepository(
 
             val discoveredAlbums = mutableListOf<AlbumEntity>()
             val discoveredTracks = mutableListOf<TrackEntity>()
+            val existingAlbumsMap = database.albumDao().getAllAlbumsList().associateBy { it.id }
             var folderCount = 0
 
             while (!queue.isEmpty()) {
@@ -337,19 +346,32 @@ class MusicRepository(
                     }
 
                     val albumId = normalizePath(node.folderUrl)
+                    val existing = existingAlbumsMap[albumId]
+                    val isCustomLocal = existing?.isCustomLocalCover == true && !existing.coverUrl.isNullOrBlank()
+
+                    // 掃描衝突防護：若偵測到該專輯 isCustomLocalCover == true，強制略過遠端封面覆寫
+                    val finalCoverUrl = if (isCustomLocal) {
+                        Log.d(TAG, "專輯 [$albumDisplayName] 具備本機自訂封面，強制略過遠端封面覆寫: ${existing.coverUrl}")
+                        existing.coverUrl
+                    } else {
+                        effectiveCoverUrl
+                    }
+
                     val album = AlbumEntity(
                         id = albumId,
                         name = albumDisplayName,
                         remotePath = node.folderUrl,
-                        coverUrl = effectiveCoverUrl,
-                        trackCount = sortedAudios.size
+                        coverUrl = finalCoverUrl,
+                        isCustomLocalCover = isCustomLocal,
+                        trackCount = sortedAudios.size,
+                        isDownloaded = existing?.isDownloaded ?: false
                     )
                     discoveredAlbums.add(album)
 
                     sortedAudios.forEachIndexed { index, audioItem ->
-                        discoveredTracks.add(createTrackEntity(audioItem, albumId, index + 1, effectiveCoverUrl))
+                        discoveredTracks.add(createTrackEntity(audioItem, albumId, index + 1, finalCoverUrl))
                     }
-                    Log.d(TAG, "已建立專輯: [$albumDisplayName], 封面: $effectiveCoverUrl, 曲目數: ${sortedAudios.size}")
+                    Log.d(TAG, "已建立專輯: [$albumDisplayName], 封面: $finalCoverUrl, 自訂封面: $isCustomLocal, 曲目數: ${sortedAudios.size}")
                 } else {
                     Log.d(TAG, "資料夾 [$currentDisplayPath] 內無直接音訊，不建立獨立專輯")
                 }

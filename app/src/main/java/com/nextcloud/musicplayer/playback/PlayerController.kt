@@ -347,6 +347,14 @@ class PlayerController(
         _playbackError.value = null
     }
 
+    fun updateCurrentTrackCover(albumId: String, newCoverUrl: String?) {
+        _currentTrack.value?.let { track ->
+            if (track.albumId == albumId) {
+                _currentTrack.value = track.copy(coverUrl = newCoverUrl)
+            }
+        }
+    }
+
     fun disconnect() {
         stopProgressPolling()
         controllerFuture?.let { MediaController.releaseFuture(it) }

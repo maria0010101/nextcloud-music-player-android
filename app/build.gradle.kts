@@ -12,8 +12,8 @@ android {
         applicationId = "com.nextcloud.musicplayer"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1"
+        versionCode = 2
+        versionName = "0.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -90,6 +90,7 @@ dependencies {
 
     // WorkManager (Background Album Download)
     implementation(libs.androidx.work.runtime.ktx)
+    implementation("androidx.documentfile:documentfile:1.0.1")
 
     // CameraX & ML Kit
     implementation(libs.androidx.camera.core)
