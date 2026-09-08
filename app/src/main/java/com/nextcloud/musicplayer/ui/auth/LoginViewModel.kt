@@ -6,6 +6,7 @@ import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.nextcloud.musicplayer.core.network.NextcloudWebDavClient
 import com.nextcloud.musicplayer.core.security.SecurePreferencesManager
 import com.nextcloud.musicplayer.data.auth.LoginFlowV2Client
 import kotlinx.coroutines.Job
@@ -24,9 +25,15 @@ sealed class LoginUiState {
     data class Error(val error: String) : LoginUiState()
 }
 
+data class PublicShareInfo(
+    val baseUrl: String,
+    val shareToken: String
+)
+
 class LoginViewModel(
     private val prefsManager: SecurePreferencesManager,
-    private val loginFlowClient: LoginFlowV2Client
+    private val loginFlowClient: LoginFlowV2Client,
+    private val webDavClient: NextcloudWebDavClient? = null
 ) : ViewModel() {
 
     private val TAG = "LoginViewModel"
@@ -106,8 +113,83 @@ class LoginViewModel(
         }
     }
 
+    /**
+     * 模組 5：透過 Nextcloud 公開分享連結 (Public Share Link) 連線
+     *
+     * 1. 支援格式：https://<domain>/s/<token> 或 https://<domain>/index.php/s/<token>
+     * 2. 端點：https://<domain>/public.php/webdav/
+     * 3. 認證：Basic Auth (使用者名稱為 token，密碼為分享密碼；無密碼時留空)
+     */
+    fun connectWithPublicShare(shareUrl: String, password: String = "") {
+        val cleanUrl = shareUrl.trim()
+        val info = parsePublicShareUrl(cleanUrl)
+        if (info == null) {
+            val err = "公開分享連結格式不符，範例：https://cloud.example.com/s/AbCdEf123456"
+            _uiState.value = LoginUiState.Error(err)
+            viewModelScope.launch { _toastEvent.emit(err) }
+            return
+        }
+
+        _uiState.value = LoginUiState.Loading("正在驗證公開分享連結與 WebDAV 連線...")
+
+        viewModelScope.launch {
+            val client = webDavClient
+            if (client == null) {
+                // 若無 client 實例直接儲存憑證
+                prefsManager.savePublicShareCredentials(info.baseUrl, info.shareToken, password)
+                _uiState.value = LoginUiState.Success
+                _toastEvent.emit("已設定公開分享連結！")
+                return@launch
+            }
+
+            val testResult = client.testPublicShareConnection(
+                serverUrl = info.baseUrl,
+                shareToken = info.shareToken,
+                password = password
+            )
+
+            if (testResult.isSuccess) {
+                prefsManager.savePublicShareCredentials(info.baseUrl, info.shareToken, password)
+                _uiState.value = LoginUiState.Success
+                _toastEvent.emit("公開分享連結連線成功！")
+            } else {
+                val err = testResult.exceptionOrNull()?.localizedMessage ?: "公開 WebDAV 連線失敗"
+                Log.e(TAG, "Public share connection failed: $err")
+                _uiState.value = LoginUiState.Error(err)
+                _toastEvent.emit(err)
+            }
+        }
+    }
+
     fun resetState() {
         pollingJob?.cancel()
         _uiState.value = LoginUiState.Idle
+    }
+
+    companion object {
+        /**
+         * 解析 Nextcloud 公開分享網址
+         * 範例：
+         * - https://cloud.example.com/s/AbCdEf123456
+         * - https://cloud.example.com/index.php/s/AbCdEf123456
+         * - https://cloud.example.com/nextcloud/s/AbCdEf123456/
+         */
+        fun parsePublicShareUrl(url: String): PublicShareInfo? {
+            val clean = url.trim().removeSuffix("/")
+            if (!clean.startsWith("http://") && !clean.startsWith("https://")) {
+                return null
+            }
+            // 標準化去除路徑中之 index.php/s/
+            val normalized = if (clean.contains("/index.php/s/")) {
+                clean.replace("/index.php/s/", "/s/")
+            } else {
+                clean
+            }
+            val regex = Regex("""^(https?://[^/]+(?:/.*?)?)/s/([a-zA-Z0-9_\-]+)$""")
+            val match = regex.find(normalized) ?: return null
+            val baseUrl = match.groupValues[1].removeSuffix("/index.php").removeSuffix("/")
+            val token = match.groupValues[2]
+            return PublicShareInfo(baseUrl, token)
+        }
     }
 }

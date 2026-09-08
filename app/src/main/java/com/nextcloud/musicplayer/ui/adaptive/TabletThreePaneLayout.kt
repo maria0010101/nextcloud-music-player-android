@@ -1,6 +1,7 @@
 package com.nextcloud.musicplayer.ui.adaptive
 
 import android.content.Context
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -47,6 +48,7 @@ import com.nextcloud.musicplayer.playback.PlayerController
 import com.nextcloud.musicplayer.ui.albums.AlbumGridItem
 import com.nextcloud.musicplayer.ui.albums.AlbumListItem
 import com.nextcloud.musicplayer.ui.albums.AlbumListViewModel
+import kotlinx.coroutines.flow.collectLatest
 import com.nextcloud.musicplayer.ui.albums.FastScrollbar
 import com.nextcloud.musicplayer.ui.detail.AlbumDetailViewModel
 import com.nextcloud.musicplayer.ui.detail.CoverSearchBottomSheet
@@ -106,6 +108,12 @@ fun TabletThreePaneLayout(
             val playingAlbumId = currentTrack?.albumId
             val target = albums.find { it.id == playingAlbumId } ?: albums.first()
             selectedAlbumId = target.id
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        albumListViewModel.syncCompletedEvent.collectLatest { msg ->
+            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -213,33 +221,6 @@ fun TabletThreePaneLayout(
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 4.dp)
                 )
-
-                // 同步狀態條
-                if (isSyncing || syncMessage.isNotBlank()) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceVariant,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 4.dp),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(10.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            if (isSyncing) {
-                                CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
-                                Spacer(modifier = Modifier.width(8.dp))
-                            }
-                            Text(
-                                text = syncMessage,
-                                style = MaterialTheme.typography.bodySmall,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
-                }
 
                 // 專輯內容網格 / 清單
                 Box(modifier = Modifier.fillMaxSize()) {
@@ -819,13 +800,15 @@ fun TabletThreePaneLayout(
                 shape = RoundedCornerShape(16.dp),
                 tonalElevation = 6.dp
             ) {
+                val currentContext = LocalContext.current
                 val settingsViewModel = remember {
                     SettingsViewModel(
                         repository = repository,
                         prefsManager = prefsManager,
                         settingsDataStore = settingsDataStore,
                         cacheManager = cacheManager,
-                        dataStoreManager = dataStoreManager
+                        dataStoreManager = dataStoreManager,
+                        context = currentContext
                     )
                 }
                 SettingsScreen(

@@ -59,7 +59,7 @@ class MainActivity : ComponentActivity() {
                     )
                 } else {
                     val loginViewModel = remember {
-                        LoginViewModel(prefs, loginFlowClient)
+                        LoginViewModel(prefs, loginFlowClient, app.webDavClient)
                     }
                     LoginScreen(
                         viewModel = loginViewModel,

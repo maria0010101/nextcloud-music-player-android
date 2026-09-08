@@ -117,7 +117,7 @@ class WebDavSyncRepository(
                 scannedFolderCount++
 
                 val currentDisplayPath = if (node.relativeSegments.isEmpty()) "根目錄" else node.relativeSegments.joinToString("/")
-                onProgress("比對資料夾 ($scannedFolderCount): $currentDisplayPath")
+                onProgress("正在同步：[$currentDisplayPath] ($scannedFolderCount)")
 
                 val itemsResult = webDavClient.listFolder(node.folderUrl, depth = 1)
                 if (itemsResult.isFailure) {

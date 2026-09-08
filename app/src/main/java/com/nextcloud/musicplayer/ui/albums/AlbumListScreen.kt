@@ -23,6 +23,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.nextcloud.musicplayer.data.local.entity.AlbumEntity
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -35,15 +36,25 @@ fun AlbumListScreen(
     val albums by viewModel.filteredAlbums.collectAsState()
     val isGridMode by viewModel.isGridMode.collectAsState()
     val isSyncing by viewModel.isSyncing.collectAsState()
-    val syncMessage by viewModel.syncMessage.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
 
     val gridState = rememberLazyGridState()
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(Unit) {
+        viewModel.syncCompletedEvent.collectLatest { msg ->
+            snackbarHostState.showSnackbar(
+                message = msg,
+                duration = SnackbarDuration.Short
+            )
+        }
+    }
 
     Scaffold(
         contentWindowInsets = WindowInsets(0.dp),
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text("Nextcloud 音樂庫") },
@@ -101,33 +112,6 @@ fun AlbumListScreen(
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             )
-
-            // Sync status banner
-            if (isSyncing || syncMessage.isNotBlank()) {
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 4.dp),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        if (isSyncing) {
-                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                            Spacer(modifier = Modifier.width(8.dp))
-                        }
-                        Text(
-                            text = syncMessage,
-                            style = MaterialTheme.typography.bodyMedium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-            }
 
             if (albums.isEmpty()) {
                 Box(

@@ -408,8 +408,9 @@ fun SettingsScreen(
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    Text("登入帳號", style = MaterialTheme.typography.labelMedium)
-                    Text(viewModel.loginName, style = MaterialTheme.typography.bodyMedium)
+                    Text(if (viewModel.isPublicShare) "連線模式" else "登入帳號", style = MaterialTheme.typography.labelMedium)
+                    val accountText = if (viewModel.isPublicShare) "公開分享連結 (Token: ${viewModel.loginName})" else viewModel.loginName
+                    Text(accountText, style = MaterialTheme.typography.bodyMedium)
 
                     Spacer(modifier = Modifier.height(20.dp))
 
@@ -421,7 +422,7 @@ fun SettingsScreen(
                     ) {
                         Icon(Icons.AutoMirrored.Filled.ExitToApp, contentDescription = null)
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("登出 Nextcloud 帳號")
+                        Text(if (viewModel.isPublicShare) "清除公開分享連線" else "登出 Nextcloud 帳號")
                     }
                 }
             }

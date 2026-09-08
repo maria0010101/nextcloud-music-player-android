@@ -26,8 +26,21 @@ class SecurePreferencesManager(context: Context) {
             .putString(KEY_SERVER_URL, cleanUrl)
             .putString(KEY_LOGIN_NAME, loginName.trim())
             .putString(KEY_APP_PASSWORD, appPassword.trim())
+            .putBoolean(KEY_IS_PUBLIC_SHARE, false)
             .apply()
     }
+
+    fun savePublicShareCredentials(serverUrl: String, shareToken: String, password: String = "") {
+        val cleanUrl = serverUrl.trim().removeSuffix("/")
+        sharedPreferences.edit()
+            .putString(KEY_SERVER_URL, cleanUrl)
+            .putString(KEY_LOGIN_NAME, shareToken.trim())
+            .putString(KEY_APP_PASSWORD, password.trim())
+            .putBoolean(KEY_IS_PUBLIC_SHARE, true)
+            .apply()
+    }
+
+    fun isPublicShare(): Boolean = sharedPreferences.getBoolean(KEY_IS_PUBLIC_SHARE, false)
 
     fun getServerUrl(): String? = sharedPreferences.getString(KEY_SERVER_URL, null)
 
@@ -47,21 +60,30 @@ class SecurePreferencesManager(context: Context) {
 
     fun getBasicAuthHeader(): String? {
         val username = getLoginName() ?: return null
-        val password = getAppPassword() ?: return null
+        val password = getAppPassword() ?: ""
         val credentials = "$username:$password"
         return "Basic " + Base64.encodeToString(credentials.toByteArray(), Base64.NO_WRAP)
     }
 
     fun getWebDavBaseUrl(): String? {
         val server = getServerUrl() ?: return null
-        val username = getLoginName() ?: return null
-        return "$server/remote.php/dav/files/$username"
+        return if (isPublicShare()) {
+            "$server/public.php/webdav"
+        } else {
+            val username = getLoginName() ?: return null
+            "$server/remote.php/dav/files/$username"
+        }
     }
 
     fun hasCredentials(): Boolean {
-        return !getServerUrl().isNullOrBlank() &&
-                !getLoginName().isNullOrBlank() &&
-                !getAppPassword().isNullOrBlank()
+        val server = getServerUrl()
+        val username = getLoginName()
+        if (server.isNullOrBlank() || username.isNullOrBlank()) return false
+        return if (isPublicShare()) {
+            true
+        } else {
+            !getAppPassword().isNullOrBlank()
+        }
     }
 
     fun clear() {
@@ -74,5 +96,6 @@ class SecurePreferencesManager(context: Context) {
         private const val KEY_LOGIN_NAME = "login_name"
         private const val KEY_APP_PASSWORD = "app_password"
         private const val KEY_MUSIC_FOLDER = "music_folder"
+        private const val KEY_IS_PUBLIC_SHARE = "is_public_share"
     }
 }

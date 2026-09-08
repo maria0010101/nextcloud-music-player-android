@@ -55,7 +55,7 @@ fun AdaptiveHomeScreen(
 
     // 共用 AlbumListViewModel，確保螢幕旋轉或版面切換時維持搜尋狀態與已載入資料
     val albumListViewModel = remember {
-        AlbumListViewModel(repository, prefs)
+        AlbumListViewModel(repository, prefs, app)
     }
 
     if (widthSizeClass == WindowWidthSizeClass.Expanded) {
@@ -188,7 +188,8 @@ private fun PhoneModeLayout(
                             prefsManager = prefs,
                             settingsDataStore = settingsDataStore,
                             cacheManager = cacheManager,
-                            dataStoreManager = dataStoreManager
+                            dataStoreManager = dataStoreManager,
+                            context = app
                         )
                     }
                     SettingsScreen(

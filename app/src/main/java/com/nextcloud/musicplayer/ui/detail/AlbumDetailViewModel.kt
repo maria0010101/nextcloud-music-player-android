@@ -209,4 +209,54 @@ class AlbumDetailViewModel(
             }
         }
     }
+
+    /**
+     * 模組 4：套用來自本機相簿選取的圖片
+     *
+     * @param imageBytes 選取圖檔的二進位資料
+     * @param toCloud true: 寫回 Nextcloud (WebDAV PUT cover.jpg); false: 僅限本機顯示 (保存於本地私有目錄)
+     * @param onResult 回呼函式 (成功與否, 回饋訊息)
+     */
+    fun applyCoverBytes(
+        imageBytes: ByteArray,
+        toCloud: Boolean,
+        onResult: (Boolean, String) -> Unit
+    ) {
+        val currentAlbum = _album.value ?: return
+        val manager = coverManager
+
+        if (manager == null) {
+            onResult(false, "系統服務尚未初始化完成")
+            return
+        }
+
+        viewModelScope.launch {
+            _isApplyingCover.value = true
+            try {
+                val applyRes = if (toCloud) {
+                    manager.applyCoverToCloud(albumId, currentAlbum.remotePath, imageBytes)
+                } else {
+                    manager.applyCoverToLocal(albumId, imageBytes)
+                }
+
+                _isApplyingCover.value = false
+
+                if (applyRes.isSuccess) {
+                    val newCoverUrl = applyRes.getOrThrow()
+                    playerController.updateCurrentTrackCover(albumId, newCoverUrl)
+                    _album.value = repository.getAlbumById(albumId)
+                    val message = if (toCloud) "已上傳至 Nextcloud 並套用" else "已套用為本機專屬封面"
+                    Log.d(TAG, "Custom cover bytes applied to album $albumId. Message: $message")
+                    onResult(true, message)
+                } else {
+                    val err = applyRes.exceptionOrNull()?.localizedMessage ?: "套用失敗"
+                    onResult(false, "更換封面失敗: $err")
+                }
+            } catch (e: Exception) {
+                _isApplyingCover.value = false
+                Log.e(TAG, "applyCoverBytes error", e)
+                onResult(false, "處理異常: ${e.localizedMessage}")
+            }
+        }
+    }
 }

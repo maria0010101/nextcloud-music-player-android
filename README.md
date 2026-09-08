@@ -24,6 +24,32 @@ Many private cloud music solutions require dedicated server-side extensions (suc
 
 ---
 
+## 🚀 What's New in v0.5
+
+- 🌐 **Nextcloud Public Share Link Support (No Account Required)**:
+  - Seamlessly browse and stream music libraries from Nextcloud folder public share links (`https://<domain>/s/<token>`) without requiring an account or app password.
+  - Robust URL parser automatically normalizes link formats, including `/index.php/s/`, trailing slashes, custom port numbers, and subpaths.
+  - Directly interacts with Nextcloud's public WebDAV endpoint (`https://<domain>/public.php/webdav/`) using HTTP Basic Authentication (`shareToken` as username; handles optional share passwords).
+  - Clean `PrimaryTabRow` switcher on the login screen to toggle between "Account Login" and "Public Share Link", with clear status indicators and disconnect controls in Settings.
+- 🔄 **WorkManager Foreground Service for Library Sync (`SyncLibraryWorker`)**:
+  - Migrated recursive library scanning from ephemeral ViewModel coroutines to an AndroidX `WorkManager` background `CoroutineWorker`.
+  - Promotes automatically to an active system Foreground Service (`foregroundServiceType="dataSync"`) with ongoing notification progress (`Syncing: [Folder Name] (X/Y)`).
+  - Background-persistent execution ensures extensive music library syncs continue uninterrupted when the app is minimized or the screen is locked.
+  - UI automatically reconnects and updates via `StateFlow` when the app is reopened.
+- 🖼️ **Local Image Picker for Custom Album Art (Photo Picker)**:
+  - Added a `[Select Image from Local Gallery]` option inside the album cover search bottom sheet.
+  - Uses the modern Android Photo Picker (`ActivityResultContracts.PickVisualMedia`) without requiring external storage permissions.
+  - Interactive preview dialog offering dual-mode application:
+    - **Write to Cloud (WebDAV PUT)**: Uploads `cover.jpg` directly to the server to sync across all devices.
+    - **Local Only**: Saves artwork to app-private storage, preserving the image locally without touching the server.
+  - Instantly clears Coil image caches and refreshes album art across all views.
+- 📱 **UI/UX Polish & Jitter Elimination**:
+  - **Auto-Scrolling Search Input**: Long album titles in the cover search text field automatically pan horizontally to keep the cursor and ending text in view (`singleLine = true, maxLines = 1`).
+  - **Overscroll Jitter Elimination**: Injected `NestedScrollConnection` into the bottom sheet to consume upward overscroll events when fully expanded, completely eliminating gesture jitter.
+  - **Streamlined Home Screen**: Removed the static sync result banner between the search bar and album grid. Replaced it with a sleek, transient Material 3 `Snackbar` / `Toast` that auto-dismisses after 2~3 seconds, giving the album grid full vertical space.
+
+---
+
 ## 🚀 What's New in v0.4
 
 - ⚡ **High-Performance Incremental Diff Sync (`WebDavSyncRepository`)**:
@@ -81,6 +107,7 @@ Many private cloud music solutions require dedicated server-side extensions (suc
 
 ### 🔐 Seamless Nextcloud Authentication
 - **Nextcloud Login Flow v2**: Log in easily via your mobile web browser with one click; tokens are generated securely.
+- **Public Share Link Access (New in v0.5)**: Connect directly via public folder shares (`https://<domain>/s/<token>`) without requiring owner credentials; seamlessly streams and downloads with optional password support.
 - **Direct App Passwords**: Support for manual server URL and dedicated app passwords.
 - **QR Code Scanner**: Integrated CameraX and Google ML Kit barcode scanning for instant setup.
 - **Hardware-Backed Security**: Session tokens and credentials are encrypted using `EncryptedSharedPreferences`.
@@ -90,10 +117,15 @@ Many private cloud music solutions require dedicated server-side extensions (suc
 - **Real-Time Audio Specs**: Displays live stream diagnostics in the player, including sample rate, bitrate, and format tag (e.g., `FLAC • 96.0 kHz • 1024 kbps`).
 - **Comprehensive Format Support**: Seamless playback of Lossless FLAC, ALAC, WAV, MP3, AAC, OGG Vorbis, and Opus.
 
-### 🔍 Online Cover Search & Dual Storage (New in v0.2)
+### 🔍 Cover Search & Gallery Customization (Enhanced in v0.5)
 - **iTunes Search API Integration**: Discover candidate album covers with instant thumbnail grids and editable search keywords.
+- **Local Photo Picker (New in v0.5)**: Select personal photos from your device's photo gallery via Android Photo Picker with zero storage permissions.
 - **Write to Cloud vs. Local Only**: Choose between uploading `cover.jpg` directly to Nextcloud via WebDAV `PUT` or storing locally in app-private storage.
 - **Rescan Protection**: Never lose custom covers during library syncs thanks to database-level protection flags (`isCustomLocalCover`).
+
+### ⚡ Persistent Sync & Smart Background Tasks (New in v0.5)
+- **WorkManager Foreground Sync**: Rock-solid background sync that persists when the app is minimized, providing real-time notification progress.
+- **Transient UI Feedback**: Clean home layout with zero permanent banner clutter; completion notifications display via temporary auto-dismissing Snackbars.
 
 ### 📁 Smart Album Hierarchy & Path Mapping
 - **Directory-Based Organization**: Intelligently aggregates your audio folders into albums.

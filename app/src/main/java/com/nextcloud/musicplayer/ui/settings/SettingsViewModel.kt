@@ -4,10 +4,13 @@ import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
 import com.nextcloud.musicplayer.core.security.SecurePreferencesManager
 import com.nextcloud.musicplayer.core.settings.AppSettingsDataStore
 import com.nextcloud.musicplayer.core.settings.DataStoreManager
 import com.nextcloud.musicplayer.data.repository.MusicRepository
+import com.nextcloud.musicplayer.data.sync.SyncLibraryWorker
 import com.nextcloud.musicplayer.playback.PlaybackCacheManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -22,7 +25,8 @@ class SettingsViewModel(
     private val prefsManager: SecurePreferencesManager,
     private val settingsDataStore: AppSettingsDataStore,
     private val cacheManager: PlaybackCacheManager,
-    private val dataStoreManager: DataStoreManager? = null
+    private val dataStoreManager: DataStoreManager? = null,
+    private val context: Context? = null
 ) : ViewModel() {
 
     val musicFolder: StateFlow<String> = settingsDataStore.musicFolder
@@ -49,9 +53,52 @@ class SettingsViewModel(
 
     val serverUrl: String = prefsManager.getServerUrl() ?: "未連線"
     val loginName: String = prefsManager.getLoginName() ?: "未知"
+    val isPublicShare: Boolean = prefsManager.isPublicShare()
 
     init {
         refreshUsedCache()
+        context?.let { ctx ->
+            observeSyncProgress(ctx)
+        }
+    }
+
+    fun observeSyncProgress(ctx: Context) {
+        val workManager = WorkManager.getInstance(ctx)
+        viewModelScope.launch {
+            workManager.getWorkInfosForUniqueWorkFlow(SyncLibraryWorker.UNIQUE_WORK_NAME).collect { workInfos ->
+                val workInfo = workInfos.firstOrNull() ?: return@collect
+                when (workInfo.state) {
+                    WorkInfo.State.RUNNING, WorkInfo.State.ENQUEUED -> {
+                        _isSyncing.value = true
+                        val msg = workInfo.progress.getString(SyncLibraryWorker.KEY_PROGRESS_MESSAGE)
+                        if (!msg.isNullOrBlank()) {
+                            _syncMessage.value = msg
+                        }
+                    }
+                    WorkInfo.State.SUCCEEDED -> {
+                        _isSyncing.value = false
+                        val msg = workInfo.outputData.getString(SyncLibraryWorker.KEY_PROGRESS_MESSAGE)
+                        if (!msg.isNullOrBlank()) {
+                            _syncMessage.value = msg
+                        }
+                    }
+                    WorkInfo.State.FAILED -> {
+                        _isSyncing.value = false
+                        val msg = workInfo.outputData.getString(SyncLibraryWorker.KEY_PROGRESS_MESSAGE)
+                            ?: workInfo.outputData.getString(SyncLibraryWorker.KEY_ERROR_MESSAGE)
+                            ?: "同步失敗"
+                        _syncMessage.value = msg
+                    }
+                    WorkInfo.State.CANCELLED -> {
+                        _isSyncing.value = false
+                        _syncMessage.value = "同步已取消"
+                    }
+                    WorkInfo.State.BLOCKED -> {
+                        _isSyncing.value = true
+                    }
+                }
+            }
+        }
     }
 
     fun refreshUsedCache() {
@@ -127,52 +174,66 @@ class SettingsViewModel(
         refreshUsedCache()
     }
 
-    fun quickSync() {
-        if (_isSyncing.value) return
-        _isSyncing.value = true
+    fun quickSync(ctx: Context? = null) {
+        val activeContext = ctx ?: context
         val target = musicFolder.value
-        _syncMessage.value = "開始快速增量同步..."
-
-        viewModelScope.launch {
-            val result = repository.incrementalSync(
-                scopedFolder = target,
-                selectedLevels = albumNameLevels.value,
-                onProgress = { msg -> _syncMessage.value = msg }
-            )
-            _isSyncing.value = false
-            if (result.isFailure) {
-                _syncMessage.value = "同步失敗: ${result.exceptionOrNull()?.localizedMessage}"
-            } else {
-                val res = result.getOrNull()
-                _syncMessage.value = "快速同步完成！新增 ${res?.addedCount ?: 0}、更新 ${res?.modifiedCount ?: 0}、刪除 ${res?.deletedCount ?: 0} 張專輯，現有 ${res?.totalTracks ?: 0} 首歌曲"
+        if (activeContext != null) {
+            _isSyncing.value = true
+            _syncMessage.value = "已將快速同步排入背景常駐任務..."
+            SyncLibraryWorker.startSync(activeContext, target, isFullRescan = false)
+            observeSyncProgress(activeContext)
+        } else {
+            if (_isSyncing.value) return
+            _isSyncing.value = true
+            _syncMessage.value = "開始快速增量同步..."
+            viewModelScope.launch {
+                val result = repository.incrementalSync(
+                    scopedFolder = target,
+                    selectedLevels = albumNameLevels.value,
+                    onProgress = { msg -> _syncMessage.value = msg }
+                )
+                _isSyncing.value = false
+                if (result.isFailure) {
+                    _syncMessage.value = "同步失敗: ${result.exceptionOrNull()?.localizedMessage}"
+                } else {
+                    val res = result.getOrNull()
+                    _syncMessage.value = "快速同步完成！新增 ${res?.addedCount ?: 0}、更新 ${res?.modifiedCount ?: 0}、刪除 ${res?.deletedCount ?: 0} 張專輯，現有 ${res?.totalTracks ?: 0} 首歌曲"
+                }
             }
         }
     }
 
-    fun fullRescan() {
-        if (_isSyncing.value) return
-        _isSyncing.value = true
+    fun fullRescan(ctx: Context? = null) {
+        val activeContext = ctx ?: context
         val target = musicFolder.value
-        _syncMessage.value = "開始強制完整重新掃描..."
-
-        viewModelScope.launch {
-            val result = repository.fullRescan(
-                scopedFolder = target,
-                selectedLevels = albumNameLevels.value,
-                onProgress = { msg -> _syncMessage.value = msg }
-            )
-            _isSyncing.value = false
-            if (result.isFailure) {
-                _syncMessage.value = "完整重新掃描失敗: ${result.exceptionOrNull()?.localizedMessage}"
-            } else {
-                val res = result.getOrNull()
-                _syncMessage.value = "完整重新掃描完成！共找到 ${res?.totalAlbums ?: 0} 張專輯、${res?.totalTracks ?: 0} 首歌曲"
+        if (activeContext != null) {
+            _isSyncing.value = true
+            _syncMessage.value = "已將強制完整重新掃描排入背景常駐任務..."
+            SyncLibraryWorker.startSync(activeContext, target, isFullRescan = true)
+            observeSyncProgress(activeContext)
+        } else {
+            if (_isSyncing.value) return
+            _isSyncing.value = true
+            _syncMessage.value = "開始強制完整重新掃描..."
+            viewModelScope.launch {
+                val result = repository.fullRescan(
+                    scopedFolder = target,
+                    selectedLevels = albumNameLevels.value,
+                    onProgress = { msg -> _syncMessage.value = msg }
+                )
+                _isSyncing.value = false
+                if (result.isFailure) {
+                    _syncMessage.value = "完整重新掃描失敗: ${result.exceptionOrNull()?.localizedMessage}"
+                } else {
+                    val res = result.getOrNull()
+                    _syncMessage.value = "完整重新掃描完成！共找到 ${res?.totalAlbums ?: 0} 張專輯、${res?.totalTracks ?: 0} 首歌曲"
+                }
             }
         }
     }
 
-    fun rescanLibrary() {
-        quickSync()
+    fun rescanLibrary(ctx: Context? = null) {
+        quickSync(ctx)
     }
 
     fun logout(onLogoutComplete: () -> Unit) {
