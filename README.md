@@ -24,6 +24,15 @@ Many private cloud music solutions require dedicated server-side extensions (suc
 
 ---
 
+## 🚀 What's New in v0.5.1
+
+- 📜 **Album Detail TopAppBar Single-Line Marquee (`basicMarquee`)**:
+  - **Fixed Toolbar Height**: Constrained album title in `AlbumDetailScreen`'s `TopAppBar` to a single line (`maxLines = 1`, `softWrap = false`), preventing long album names from wrapping and vertically stretching the toolbar.
+  - **Smooth Horizontal Marquee Scrolling**: Integrated Compose Foundation `Modifier.basicMarquee()` with an initial 2-second delay and repeat delay (`iterations = Int.MAX_VALUE`, `initialDelayMillis = 2000`, `repeatDelayMillis = 2000`, `velocity = 30.dp`).
+  - **Auto-Activation**: Short album titles remain centered and static, while long titles smoothly scroll horizontally without clipping or overflowing.
+
+---
+
 ## 🚀 What's New in v0.5
 
 - 🌐 **Nextcloud Public Share Link Support (No Account Required)**:

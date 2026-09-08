@@ -1,6 +1,7 @@
 package com.nextcloud.musicplayer.ui.detail
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -47,7 +48,20 @@ fun AlbumDetailScreen(
         contentWindowInsets = WindowInsets(0.dp),
         topBar = {
             TopAppBar(
-                title = { Text(album?.name ?: "專輯曲目") },
+                title = {
+                    Text(
+                        text = album?.name ?: "專輯曲目",
+                        maxLines = 1,
+                        softWrap = false,
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.basicMarquee(
+                            iterations = Int.MAX_VALUE,
+                            initialDelayMillis = 2000,
+                            repeatDelayMillis = 2000,
+                            velocity = 30.dp
+                        )
+                    )
+                },
                 windowInsets = WindowInsets(0.dp),
                 navigationIcon = {
                     IconButton(onClick = onBack) {
