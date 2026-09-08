@@ -24,6 +24,24 @@ Many private cloud music solutions require dedicated server-side extensions (suc
 
 ---
 
+## 🚀 What's New in v0.4
+
+- ⚡ **High-Performance Incremental Diff Sync (`WebDavSyncRepository`)**:
+  - Replaces slow, full recursive server rescans with intelligent differential synchronization, reducing sync times from minutes to seconds even for massive libraries (1,500+ albums / 15,000+ tracks).
+  - **ETag & Modification Timestamp Caching**: Matches remote directory `d:getetag` and `d:getlastmodified` properties against cached local Room records. Unchanged album directories are skipped in milliseconds without issuing unnecessary child requests.
+  - **Pruned Directory Cleanup (`deletedPaths`)**: Automatically detects folders removed or renamed on the remote server, batch-deletes obsolete `AlbumEntity` and `TrackEntity` records from Room, and purges corresponding local cover caches and offline audio files.
+  - **Selective Deep Scan (`newPaths`)**: Recursively inspects only newly discovered or modified directories to parse audio metadata, track numbers, duration, and embedded/external cover art.
+  - **Custom Cover Protection**: Strictly protects albums flagged with `isCustomLocalCover == true`, preventing custom local cover art from being overwritten or reverted during synchronization.
+- ⚙️ **Dual Scanning Modes & Informative UI Feedback**:
+  - **Quick Sync (Incremental Update)**: Default synchronization option in the settings menu; performs fast differential sync with real-time UI counters.
+  - **Force Full Rescan (Full Rescan)**: Manual diagnostic option that clears the local database cache and reconstructs the library from scratch if metadata corruption occurs.
+  - **Live Progress Messages**: Displays dynamic status updates ("Comparing directory differences...", "Cleaning deleted folders...", "Quick sync complete! Added X, updated Y, deleted Z...").
+- 🗄️ **Room Database Migration (v3 → v4)**:
+  - Added `etag` and `lastModified` columns to `albums` table with zero data loss migration (`MIGRATION_3_4`).
+  - Added high-throughput batch deletion methods (`deleteAlbumsByIds`, `deleteAlbumsByPaths`, `deleteTracksByAlbumIds`) in `AlbumDao` and `TrackDao`.
+
+---
+
 ## 🚀 What's New in v0.3
 
 - 🖥️ **Adaptive Multi-Pane Layout for Tablets & Large Screens (Three-Pane Architecture)**:
@@ -134,7 +152,7 @@ Ensures artwork is always displayed using a 4-tier resolution pipeline:
 
 ### Download
 You can download the pre-compiled, signed APK directly from GitHub Releases:
-- 👉 **[Download NextcloudPlayer-v0.3.apk](https://github.com/maria0010101/nextcloud-music-player-android/releases/latest)**
+- 👉 **[Download NextcloudPlayer-v0.4.apk](https://github.com/maria0010101/nextcloud-music-player-android/releases/latest)**
 
 ---
 

@@ -33,6 +33,9 @@ interface TrackDao {
     @Query("DELETE FROM tracks WHERE albumId = :albumId")
     suspend fun deleteTracksByAlbum(albumId: String): Int
 
+    @Query("DELETE FROM tracks WHERE albumId IN (:albumIds)")
+    suspend fun deleteTracksByAlbumIds(albumIds: List<String>): Int
+
     @Query("DELETE FROM tracks")
     suspend fun clearTracks(): Int
 }

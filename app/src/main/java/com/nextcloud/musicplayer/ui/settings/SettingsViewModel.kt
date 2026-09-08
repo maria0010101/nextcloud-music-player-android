@@ -127,26 +127,52 @@ class SettingsViewModel(
         refreshUsedCache()
     }
 
-    fun rescanLibrary() {
+    fun quickSync() {
         if (_isSyncing.value) return
         _isSyncing.value = true
         val target = musicFolder.value
-        _syncMessage.value = "開始連線掃描 /$target..."
+        _syncMessage.value = "開始快速增量同步..."
 
         viewModelScope.launch {
-            val result = repository.scanMusicLibrary(
+            val result = repository.incrementalSync(
                 scopedFolder = target,
                 selectedLevels = albumNameLevels.value,
                 onProgress = { msg -> _syncMessage.value = msg }
             )
             _isSyncing.value = false
             if (result.isFailure) {
-                _syncMessage.value = "掃描失敗: ${result.exceptionOrNull()?.localizedMessage}"
+                _syncMessage.value = "同步失敗: ${result.exceptionOrNull()?.localizedMessage}"
             } else {
-                val count = result.getOrDefault(0)
-                _syncMessage.value = "掃描同步完成！共找到 $count 首歌曲"
+                val res = result.getOrNull()
+                _syncMessage.value = "快速同步完成！新增 ${res?.addedCount ?: 0}、更新 ${res?.modifiedCount ?: 0}、刪除 ${res?.deletedCount ?: 0} 張專輯，現有 ${res?.totalTracks ?: 0} 首歌曲"
             }
         }
+    }
+
+    fun fullRescan() {
+        if (_isSyncing.value) return
+        _isSyncing.value = true
+        val target = musicFolder.value
+        _syncMessage.value = "開始強制完整重新掃描..."
+
+        viewModelScope.launch {
+            val result = repository.fullRescan(
+                scopedFolder = target,
+                selectedLevels = albumNameLevels.value,
+                onProgress = { msg -> _syncMessage.value = msg }
+            )
+            _isSyncing.value = false
+            if (result.isFailure) {
+                _syncMessage.value = "完整重新掃描失敗: ${result.exceptionOrNull()?.localizedMessage}"
+            } else {
+                val res = result.getOrNull()
+                _syncMessage.value = "完整重新掃描完成！共找到 ${res?.totalAlbums ?: 0} 張專輯、${res?.totalTracks ?: 0} 首歌曲"
+            }
+        }
+    }
+
+    fun rescanLibrary() {
+        quickSync()
     }
 
     fun logout(onLogoutComplete: () -> Unit) {

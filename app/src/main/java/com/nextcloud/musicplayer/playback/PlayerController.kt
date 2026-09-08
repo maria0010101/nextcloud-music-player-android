@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.Locale
 
 class PlayerController(
@@ -119,6 +120,7 @@ class PlayerController(
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 updateCurrentTrack(player)
                 updateAudioSpecs(player)
+                ensureArtworkForMediaItem(player, mediaItem)
             }
 
             override fun onPlaybackStateChanged(state: Int) {
@@ -283,16 +285,33 @@ class PlayerController(
         coverUrl: String?
     ) {
         currentPlaylist = tracks
+        val effectiveCover = tracks.getOrNull(startIndex)?.coverUrl ?: coverUrl
+
+        // 1. 同步檢查記憶體快取或本地圖檔 Byte 陣列，優先為起播項目帶入封面資料
+        val cachedArtworkBytes = ArtworkHelper.getOrLoadArtworkBytesSync(context, effectiveCover)
+
         val mediaItems = tracks.map { track ->
             val playbackUrl = track.playableUri
             val playUri = Uri.parse(playbackUrl)
-            val effectiveCover = track.coverUrl ?: coverUrl
+            val trackCover = track.coverUrl ?: coverUrl
 
-            val metadata = MediaMetadata.Builder()
+            val metaBuilder = MediaMetadata.Builder()
                 .setTitle(track.title)
                 .setArtist(track.format)
-                .setArtworkUri(effectiveCover?.let { Uri.parse(it) })
-                .build()
+                .setArtworkUri(trackCover?.let { Uri.parse(it) })
+
+            // 若該曲目封面與 effectiveCover 一致且已有快取，直接注入 artworkData
+            val trackBytes = if (trackCover == effectiveCover) {
+                cachedArtworkBytes
+            } else {
+                ArtworkHelper.getCachedArtworkBytes(trackCover)
+            }
+
+            if (trackBytes != null) {
+                metaBuilder.setArtworkData(trackBytes, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
+            }
+
+            val metadata = metaBuilder.build()
 
             MediaItem.Builder()
                 .setMediaId(playbackUrl)
@@ -306,13 +325,55 @@ class PlayerController(
                 .build()
         }
 
-        Log.d(TAG, "playTracks: 設定佇列共 ${mediaItems.size} 首，由第 $startIndex 首開始播放")
+        Log.d(TAG, "playTracks: 設定佇列共 ${mediaItems.size} 首，由第 $startIndex 首開始播放 (cachedArtwork=${cachedArtworkBytes != null})")
         _playbackError.value = null
         _playbackState.value = PlaybackState.Buffering("檔案緩衝暫存中，請稍候...")
 
         controller.setMediaItems(mediaItems, startIndex, 0L)
         controller.prepare()
         controller.play()
+
+        // 2. 若起播時封面尚未快取，非同步載入並即時更新目前曲目的 PlaylistMetadata
+        if (cachedArtworkBytes == null && !effectiveCover.isNullOrBlank()) {
+            scope.launch(Dispatchers.IO) {
+                val loadedBytes = ArtworkHelper.getOrLoadArtworkBytes(context, effectiveCover)
+                if (loadedBytes != null) {
+                    withContext(Dispatchers.Main) {
+                        val currentCtrl = mediaController ?: return@withContext
+                        val currentItem = currentCtrl.currentMediaItem ?: return@withContext
+                        val updatedMeta = currentItem.mediaMetadata.buildUpon()
+                            .setArtworkData(loadedBytes, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
+                            .build()
+                        currentCtrl.setPlaylistMetadata(updatedMeta)
+                        Log.d(TAG, "非同步載入起播封面完成，已更新 PlaylistMetadata (${loadedBytes.size} bytes)")
+                    }
+                }
+            }
+        }
+    }
+
+    private fun ensureArtworkForMediaItem(player: Player, mediaItem: MediaItem?) {
+        if (mediaItem == null) return
+        val metadata = mediaItem.mediaMetadata
+        if (metadata.artworkData == null && metadata.artworkUri != null) {
+            val uriStr = metadata.artworkUri.toString()
+            scope.launch(Dispatchers.IO) {
+                val bytes = ArtworkHelper.getOrLoadArtworkBytes(context, uriStr)
+                if (bytes != null) {
+                    withContext(Dispatchers.Main) {
+                        if (player.currentMediaItem?.mediaId == mediaItem.mediaId) {
+                            val updatedMeta = player.currentMediaItem?.mediaMetadata?.buildUpon()
+                                ?.setArtworkData(bytes, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
+                                ?.build()
+                            if (updatedMeta != null) {
+                                player.setPlaylistMetadata(updatedMeta)
+                                Log.d(TAG, "切歌已同步更新封面 artworkData (${bytes.size} bytes)")
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     fun togglePlayPause() {
@@ -369,9 +430,29 @@ class PlayerController(
     }
 
     fun updateCurrentTrackCover(albumId: String, newCoverUrl: String?) {
+        ArtworkHelper.invalidate(newCoverUrl)
         _currentTrack.value?.let { track ->
             if (track.albumId == albumId) {
                 _currentTrack.value = track.copy(coverUrl = newCoverUrl)
+                if (!newCoverUrl.isNullOrBlank()) {
+                    scope.launch(Dispatchers.IO) {
+                        val bytes = ArtworkHelper.getOrLoadArtworkBytes(context, newCoverUrl)
+                        if (bytes != null) {
+                            withContext(Dispatchers.Main) {
+                                mediaController?.let { controller ->
+                                    val current = controller.currentMediaItem
+                                    if (current != null) {
+                                        val updatedMeta = current.mediaMetadata.buildUpon()
+                                            .setArtworkUri(Uri.parse(newCoverUrl))
+                                            .setArtworkData(bytes, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
+                                            .build()
+                                        controller.setPlaylistMetadata(updatedMeta)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

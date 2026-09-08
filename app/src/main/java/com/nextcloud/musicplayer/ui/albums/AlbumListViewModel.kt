@@ -64,19 +64,19 @@ class AlbumListViewModel(
         _isSyncing.value = true
         val targetFolder = _selectedFolder.value
         val display = if (targetFolder.isEmpty()) "根目錄" else "/$targetFolder"
-        _syncMessage.value = "開始連線掃描 $display..."
+        _syncMessage.value = "開始快速同步 $display..."
 
         viewModelScope.launch {
-            val result = repository.scanMusicLibrary(
+            val result = repository.incrementalSync(
                 scopedFolder = targetFolder,
                 onProgress = { msg -> _syncMessage.value = msg }
             )
             _isSyncing.value = false
             if (result.isFailure) {
-                _syncMessage.value = "掃描失敗: ${result.exceptionOrNull()?.localizedMessage}"
+                _syncMessage.value = "同步失敗: ${result.exceptionOrNull()?.localizedMessage}"
             } else {
-                val count = result.getOrDefault(0)
-                _syncMessage.value = "掃描完成！共同步 $count 首歌曲"
+                val res = result.getOrNull()
+                _syncMessage.value = "快速同步完成！新增 ${res?.addedCount ?: 0}、更新 ${res?.modifiedCount ?: 0}、刪除 ${res?.deletedCount ?: 0}，共 ${res?.totalTracks ?: 0} 首"
             }
         }
     }

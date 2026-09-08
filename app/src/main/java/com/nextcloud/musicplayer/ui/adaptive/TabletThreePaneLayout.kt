@@ -450,40 +450,36 @@ fun TabletThreePaneLayout(
                             Spacer(modifier = Modifier.height(8.dp))
 
                             // 操作列：線上更換封面與下載整張專輯
+                            val isDownloading = downloadStatus != null && downloadStatus != "已完成下載"
+                            val isDownloaded = currentAlbum.isDownloaded || downloadStatus == "已完成下載"
+
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
                                 OutlinedButton(
                                     onClick = { showCoverSearchSheet = true },
-                                    modifier = Modifier.weight(1f),
-                                    shape = RoundedCornerShape(10.dp),
-                                    contentPadding = PaddingValues(vertical = 8.dp)
+                                    shape = RoundedCornerShape(20.dp),
+                                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
                                 ) {
-                                    Icon(Icons.Default.ImageSearch, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("搜尋更換封面", style = MaterialTheme.typography.labelMedium)
+                                    Icon(Icons.Default.ImageSearch, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("線上更換封面", style = MaterialTheme.typography.labelMedium)
                                 }
 
-                                FilledTonalButton(
+                                Spacer(modifier = Modifier.width(8.dp))
+
+                                IconButton(
                                     onClick = { detailViewModel?.startDownloadAlbum(context) },
-                                    modifier = Modifier.weight(1f),
-                                    shape = RoundedCornerShape(10.dp),
-                                    contentPadding = PaddingValues(vertical = 8.dp),
-                                    enabled = downloadStatus == null || downloadStatus == "已完成下載"
+                                    enabled = !isDownloading
                                 ) {
-                                    if (downloadStatus != null && downloadStatus != "已完成下載") {
-                                        CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text(downloadStatus!!, style = MaterialTheme.typography.labelSmall)
-                                    } else if (currentAlbum.isDownloaded || downloadStatus == "已完成下載") {
-                                        Icon(Icons.Default.CheckCircle, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text("已完成下載", style = MaterialTheme.typography.labelMedium)
+                                    if (isDownloading) {
+                                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                                    } else if (isDownloaded) {
+                                        Icon(Icons.Default.CheckCircle, contentDescription = "已下載至本機", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
                                     } else {
-                                        Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text("下載整張專輯", style = MaterialTheme.typography.labelMedium)
+                                        Icon(Icons.Default.Download, contentDescription = "下載整張專輯", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
                                     }
                                 }
                             }

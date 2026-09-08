@@ -126,7 +126,7 @@ fun SettingsScreen(
                     Spacer(modifier = Modifier.height(12.dp))
 
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Button(
+                        OutlinedButton(
                             onClick = { showFolderPicker = true },
                             modifier = Modifier.weight(1f),
                             shape = RoundedCornerShape(8.dp)
@@ -136,8 +136,8 @@ fun SettingsScreen(
                             Text("瀏覽選取")
                         }
 
-                        OutlinedButton(
-                            onClick = { viewModel.rescanLibrary() },
+                        Button(
+                            onClick = { viewModel.quickSync() },
                             modifier = Modifier.weight(1f),
                             shape = RoundedCornerShape(8.dp),
                             enabled = !isSyncing
@@ -145,14 +145,37 @@ fun SettingsScreen(
                             if (isSyncing) {
                                 CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("掃描中...")
+                                Text("同步中...")
                             } else {
                                 Icon(Icons.Default.Sync, contentDescription = null)
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("立即掃描")
+                                Text("快速同步")
                             }
                         }
                     }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    OutlinedButton(
+                        onClick = { viewModel.fullRescan() },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp),
+                        enabled = !isSyncing,
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = MaterialTheme.colorScheme.error
+                        )
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("強制完整重新掃描 (Full Rescan)")
+                    }
+
+                    Text(
+                        text = "快速同步僅比對新增/異動資料夾並移除失效專輯；若中繼資料異常可使用強制重新掃描。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
 
                     if (syncMessage.isNotEmpty()) {
                         Spacer(modifier = Modifier.height(10.dp))

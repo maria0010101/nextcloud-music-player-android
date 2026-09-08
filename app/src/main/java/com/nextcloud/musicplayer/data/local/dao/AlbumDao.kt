@@ -36,6 +36,12 @@ interface AlbumDao {
     @Query("DELETE FROM albums WHERE id = :id")
     suspend fun deleteAlbum(id: String): Int
 
+    @Query("DELETE FROM albums WHERE id IN (:ids)")
+    suspend fun deleteAlbumsByIds(ids: List<String>): Int
+
+    @Query("DELETE FROM albums WHERE remotePath IN (:remotePaths)")
+    suspend fun deleteAlbumsByPaths(remotePaths: List<String>): Int
+
     @Query("DELETE FROM albums")
     suspend fun clearAlbums(): Int
 }

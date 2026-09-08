@@ -18,11 +18,19 @@ import com.google.common.util.concurrent.ListenableFuture
 import com.nextcloud.musicplayer.MainActivity
 import com.nextcloud.musicplayer.NextcloudMusicApp
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
 class MusicPlaybackService : MediaSessionService() {
 
     private val TAG = "MusicPlaybackService"
     private var mediaSession: MediaSession? = null
     private lateinit var player: ExoPlayer
+    private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     @OptIn(UnstableApi::class)
     override fun onCreate() {
@@ -56,6 +64,30 @@ class MusicPlaybackService : MediaSessionService() {
                     Player.STATE_IDLE -> Log.d(TAG, "Player idle")
                 }
             }
+
+            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                if (mediaItem == null) return
+                // 當切換曲目且未帶有 artworkData 時，非同步獲取並注入至 PlaylistMetadata
+                val metadata = mediaItem.mediaMetadata
+                if (metadata.artworkData == null && metadata.artworkUri != null) {
+                    val uriStr = metadata.artworkUri.toString()
+                    serviceScope.launch(Dispatchers.IO) {
+                        val bytes = ArtworkHelper.getOrLoadArtworkBytes(applicationContext, uriStr)
+                        if (bytes != null) {
+                            withContext(Dispatchers.Main) {
+                                val current = player.currentMediaItem
+                                if (current != null && current.mediaId == mediaItem.mediaId) {
+                                    val updatedMetadata = current.mediaMetadata.buildUpon()
+                                        .setArtworkData(bytes, androidx.media3.common.MediaMetadata.PICTURE_TYPE_FRONT_COVER)
+                                        .build()
+                                    player.setPlaylistMetadata(updatedMetadata)
+                                    Log.d(TAG, "onMediaItemTransition: 已注入封面 Byte 陣列 (${bytes.size} bytes)")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         })
 
         val sessionActivityPendingIntent = PendingIntent.getActivity(
@@ -68,6 +100,7 @@ class MusicPlaybackService : MediaSessionService() {
         mediaSession = MediaSession.Builder(this, player)
             .setSessionActivity(sessionActivityPendingIntent)
             .setCallback(MediaSessionCallback())
+            .setBitmapLoader(CoilBitmapLoader(this))
             .build()
     }
 
@@ -83,6 +116,7 @@ class MusicPlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        serviceScope.cancel()
         mediaSession?.run {
             player.release()
             release()
@@ -97,11 +131,19 @@ class MusicPlaybackService : MediaSessionService() {
             controller: MediaSession.ControllerInfo,
             mediaItems: MutableList<MediaItem>
         ): ListenableFuture<MutableList<MediaItem>> {
-            // 正確保留與注入 MediaItem 的真實 URI
+            // 正確保留與注入 MediaItem 的真實 URI，並檢查快取的封面 Byte 陣列
             val updatedItems = mediaItems.map { item ->
                 val targetUri = item.requestMetadata.mediaUri
                     ?: item.localConfiguration?.uri
                     ?: android.net.Uri.parse(item.mediaId)
+
+                val artUri = item.mediaMetadata.artworkUri
+                val cachedBytes = if (artUri != null) ArtworkHelper.getCachedArtworkBytes(artUri.toString()) else null
+
+                val metaBuilder = item.mediaMetadata.buildUpon()
+                if (item.mediaMetadata.artworkData == null && cachedBytes != null) {
+                    metaBuilder.setArtworkData(cachedBytes, androidx.media3.common.MediaMetadata.PICTURE_TYPE_FRONT_COVER)
+                }
 
                 item.buildUpon()
                     .setUri(targetUri)
@@ -110,6 +152,7 @@ class MusicPlaybackService : MediaSessionService() {
                             .setMediaUri(targetUri)
                             .build()
                     )
+                    .setMediaMetadata(metaBuilder.build())
                     .build()
             }.toMutableList()
 

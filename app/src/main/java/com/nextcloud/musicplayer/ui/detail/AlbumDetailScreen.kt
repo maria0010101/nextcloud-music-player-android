@@ -55,6 +55,32 @@ fun AlbumDetailScreen(
                     }
                 },
                 actions = {
+                    val isDownloading = downloadStatus != null && downloadStatus != "已完成下載"
+                    val isDownloaded = album?.isDownloaded == true || downloadStatus == "已完成下載"
+
+                    IconButton(
+                        onClick = { viewModel.startDownloadAlbum(context) },
+                        enabled = !isDownloading
+                    ) {
+                        if (isDownloading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp
+                            )
+                        } else if (isDownloaded) {
+                            Icon(
+                                imageVector = Icons.Default.CheckCircle,
+                                contentDescription = "已下載至本機",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.Download,
+                                contentDescription = "下載整張專輯"
+                            )
+                        }
+                    }
+
                     IconButton(onClick = { showCoverSearchSheet = true }) {
                         Icon(Icons.Default.ImageSearch, contentDescription = "線上搜尋封面")
                     }
@@ -117,23 +143,6 @@ fun AlbumDetailScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    // 模組 4：觸發入口 - 線上搜尋/更換封面按鈕
-                    OutlinedButton(
-                        onClick = { showCoverSearchSheet = true },
-                        shape = RoundedCornerShape(20.dp),
-                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.ImageSearch,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("線上搜尋/更換封面", style = MaterialTheme.typography.labelLarge)
-                    }
-
                     Spacer(modifier = Modifier.height(16.dp))
 
                     Row(
@@ -158,33 +167,6 @@ fun AlbumDetailScreen(
                             Icon(Icons.Default.Shuffle, contentDescription = null)
                             Spacer(modifier = Modifier.width(6.dp))
                             Text("隨機播放")
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    // 模組 4：整張專輯離線下載按鈕
-                    FilledTonalButton(
-                        onClick = { viewModel.startDownloadAlbum(context) },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp),
-                        enabled = downloadStatus == null || downloadStatus == "已完成下載"
-                    ) {
-                        if (downloadStatus != null && downloadStatus != "已完成下載") {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
-                                strokeWidth = 2.dp
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(downloadStatus!!)
-                        } else if (album?.isDownloaded == true || downloadStatus == "已完成下載") {
-                            Icon(Icons.Default.CheckCircle, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("整張專輯已下載至本機 (離線可用)")
-                        } else {
-                            Icon(Icons.Default.Download, contentDescription = null)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("下載整張專輯 (離線播放)")
                         }
                     }
                 }

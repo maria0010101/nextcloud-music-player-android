@@ -12,7 +12,9 @@ data class AlbumEntity(
     val isCustomLocalCover: Boolean = false,
     val trackCount: Int = 0,
     val isDownloaded: Boolean = false,
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
+    val etag: String? = null,
+    val lastModified: String? = null
 ) {
     val coverUri: String? get() = coverUrl
 }
