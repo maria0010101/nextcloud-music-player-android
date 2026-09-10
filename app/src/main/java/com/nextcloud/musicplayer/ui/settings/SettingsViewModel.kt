@@ -38,6 +38,9 @@ class SettingsViewModel(
     val albumNameLevels: StateFlow<Set<Int>> = settingsDataStore.albumNameLevels
         .stateIn(viewModelScope, SharingStarted.Lazily, AppSettingsDataStore.DEFAULT_ALBUM_NAME_LEVELS)
 
+    val volumeSteps: StateFlow<Int> = settingsDataStore.volumeSteps
+        .stateIn(viewModelScope, SharingStarted.Lazily, AppSettingsDataStore.DEFAULT_VOLUME_STEPS)
+
     // 模組 2：離線下載 SAF 目錄 URI
     val downloadStorageUri: StateFlow<String?> = (dataStoreManager?.downloadStorageUri ?: flowOf(null))
         .stateIn(viewModelScope, SharingStarted.Lazily, null)
@@ -161,6 +164,12 @@ class SettingsViewModel(
         viewModelScope.launch {
             settingsDataStore.saveAlbumNameLevels(newLevels)
             repository.reapplyAlbumNameLevels(newLevels, musicFolder.value)
+        }
+    }
+
+    fun updateVolumeSteps(newSteps: Int) {
+        viewModelScope.launch {
+            settingsDataStore.saveVolumeSteps(newSteps)
         }
     }
 

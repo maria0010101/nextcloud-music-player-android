@@ -17,6 +17,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.nextcloud.musicplayer.ui.folder.FolderPickerDialog
 
@@ -35,6 +36,7 @@ fun SettingsScreen(
     val downloadStorageUri by viewModel.downloadStorageUri.collectAsState()
     val isSyncing by viewModel.isSyncing.collectAsState()
     val syncMessage by viewModel.syncMessage.collectAsState()
+    val volumeSteps by viewModel.volumeSteps.collectAsState()
 
     val openDocumentTreeLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
@@ -83,7 +85,7 @@ fun SettingsScreen(
         contentWindowInsets = WindowInsets(0.dp),
         topBar = {
             TopAppBar(
-                title = { Text("偏好設定") },
+                title = { Text("設定") },
                 windowInsets = WindowInsets(0.dp),
                 navigationIcon = {
                     IconButton(onClick = onBack) {
@@ -177,13 +179,24 @@ fun SettingsScreen(
                         modifier = Modifier.padding(top = 4.dp)
                     )
 
-                    if (syncMessage.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(10.dp))
-                        Text(
-                            text = syncMessage,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.primary
-                        )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(24.dp),
+                        contentAlignment = Alignment.CenterStart
+                    ) {
+                        if (syncMessage.isNotEmpty()) {
+                            Text(
+                                text = syncMessage,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
                     }
                 }
             }
@@ -389,7 +402,52 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(28.dp))
 
-            // 5. 帳號與連線資訊
+            // 5. 音量調節精度
+            Text(
+                text = "音量調節精度",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("App 前台自訂音量段數（退至背景或關閉時自動還原系統原生設定）", style = MaterialTheme.typography.labelMedium)
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    val volumeOptions = listOf(
+                        15 to "預設（依循系統 15 段）",
+                        25 to "高精度 25 段",
+                        50 to "超高精度 50 段"
+                    )
+
+                    volumeOptions.forEach { (steps, label) ->
+                        val isSelected = volumeSteps == steps
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { viewModel.updateVolumeSteps(steps) }
+                                .padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = isSelected,
+                                onClick = { viewModel.updateVolumeSteps(steps) }
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(text = label, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(28.dp))
+
+            // 6. 帳號與連線資訊
             Text(
                 text = "Nextcloud 伺服器資訊",
                 style = MaterialTheme.typography.titleMedium,

@@ -24,6 +24,26 @@ Many private cloud music solutions require dedicated server-side extensions (suc
 
 ---
 
+## 🚀 What's New in v0.6
+
+- 🎚️ **Custom High-Precision Volume Control (25 / 50 Steps)**:
+  - **Granular Volume Precision**: Choose between "Default (System 15 Steps)", "High Precision 25 Steps", and "Ultra-High Precision 50 Steps" in Settings, persisted seamlessly via Jetpack DataStore (`volume_steps_key`).
+  - **Hardware Key Interception**: Intercepts `KEYCODE_VOLUME_UP` and `KEYCODE_VOLUME_DOWN` in `MainActivity` when in the foreground with 25 or 50 steps active, completely suppressing the default system 15-step volume dialog.
+  - **Software Volume Regulation (`PlayerViewModel`)**: Computes exact software attenuation ($floatVolume = currentStep / maxSteps$) and applies it directly to ExoPlayer (`setVolume`).
+  - **Auto-Release to System**: Automatically restores native 15 steps when the app is backgrounded or when set to default 15-step mode.
+- 📱 **Floating System-Style Volume HUD (`VolumeHud`)**:
+  - **Native-Look Capsule Slider**: Sleek vertical pill capsule aligned to the right edge with a live step indicator badge (e.g., `44 / 50`), progressive bottom-to-top track fill, and reactive mute/speaker icons.
+  - **Touch & Gesture Dragging**: Directly tap or drag vertically anywhere along the floating slider to adjust volume smoothly in real time.
+  - **Smart Transient Animation**: Slides in and fades in smoothly upon physical key press or touch, and automatically fades out after 1.5 seconds of inactivity.
+- 🔄 **Bi-Directional System Volume Smoothing & Sync (`VolumeSyncManager`)**:
+  - **Foreground Alignment (AudioManager → Steps)**: On entering the foreground (`onStart`), reads the current system media volume, maps it to the custom step, sets the software volume, and elevates the system media stream to maximum (`maxSys`) without UI flags. This grants ExoPlayer the complete physical dynamic range of the hardware DAC.
+  - **Background Restoration (Steps → AudioManager)**: On exiting to the background (`onStop` / `onDestroy`), converts the internal software ratio back to the native system volume level, restores system media volume via `AudioManager`, and resets ExoPlayer software attenuation to `1.0f`. This guarantees seamless background playback and eliminates jarring loudness shifts when switching apps.
+- 🎨 **Settings Screen & Sync Layout Shift Fix**:
+  - **Title Normalization**: Standardized the Settings page `TopAppBar` title from "偏好設定" to "設定" (`settings_title`).
+  - **Jitter-Free Sync Status**: Enforced single-line rendering (`maxLines = 1`, `softWrap = false`, `overflow = TextOverflow.Ellipsis`) inside a dedicated 24dp fixed-height container, completely eliminating layout shifting and vertical bouncing of the album name hierarchy settings during synchronization.
+
+---
+
 ## 🚀 What's New in v0.5.1
 
 - 📜 **Album Detail TopAppBar Single-Line Marquee (`basicMarquee`)**:

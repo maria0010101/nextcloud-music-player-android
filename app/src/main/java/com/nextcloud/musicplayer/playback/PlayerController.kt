@@ -90,6 +90,10 @@ class PlayerController(
                 mediaController = controller
                 setupPlayerListener(controller)
                 updateStateFromPlayer(controller)
+                pendingVolume?.let { vol ->
+                    controller.volume = vol
+                    pendingVolume = null
+                }
                 Log.d(TAG, "MediaController 已成功連線")
                 onConnected?.invoke(controller)
             } catch (e: Exception) {
@@ -455,6 +459,22 @@ class PlayerController(
                 }
             }
         }
+    }
+
+    private var pendingVolume: Float? = null
+
+    fun setVolume(volume: Float) {
+        val clamped = volume.coerceIn(0f, 1f)
+        val controller = mediaController
+        if (controller != null) {
+            controller.volume = clamped
+        } else {
+            pendingVolume = clamped
+        }
+    }
+
+    fun getVolume(): Float {
+        return mediaController?.volume ?: pendingVolume ?: 1.0f
     }
 
     fun disconnect() {

@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
@@ -19,9 +20,11 @@ class AppSettingsDataStore(private val context: Context) {
         val KEY_CACHE_MAX_BYTES = longPreferencesKey("cache_max_bytes")
         val KEY_MUSIC_FOLDER = stringPreferencesKey("music_folder")
         val KEY_ALBUM_NAME_LEVELS = stringSetPreferencesKey("album_name_levels")
+        val KEY_VOLUME_STEPS = intPreferencesKey("volume_steps_key")
 
         const val DEFAULT_CACHE_BYTES = 1024L * 1024L * 1024L // 1GB default
         val DEFAULT_ALBUM_NAME_LEVELS = setOf(2, 3) // 預設勾選階層 2、階層 3
+        const val DEFAULT_VOLUME_STEPS = 15
     }
 
     val cacheMaxSizeBytes: Flow<Long> = context.dataStore.data.map { preferences ->
@@ -41,6 +44,10 @@ class AppSettingsDataStore(private val context: Context) {
         }
     }
 
+    val volumeSteps: Flow<Int> = context.dataStore.data.map { preferences ->
+        preferences[KEY_VOLUME_STEPS] ?: DEFAULT_VOLUME_STEPS
+    }
+
     suspend fun saveCacheMaxBytes(bytes: Long) {
         context.dataStore.edit { preferences ->
             preferences[KEY_CACHE_MAX_BYTES] = bytes
@@ -56,6 +63,12 @@ class AppSettingsDataStore(private val context: Context) {
     suspend fun saveAlbumNameLevels(levels: Set<Int>) {
         context.dataStore.edit { preferences ->
             preferences[KEY_ALBUM_NAME_LEVELS] = levels.map { it.toString() }.toSet()
+        }
+    }
+
+    suspend fun saveVolumeSteps(steps: Int) {
+        context.dataStore.edit { preferences ->
+            preferences[KEY_VOLUME_STEPS] = steps
         }
     }
 }
