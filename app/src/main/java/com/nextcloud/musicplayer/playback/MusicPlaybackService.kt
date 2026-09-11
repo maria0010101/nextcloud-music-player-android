@@ -1,7 +1,9 @@
 package com.nextcloud.musicplayer.playback
 
 import android.app.PendingIntent
+import android.content.Context
 import android.content.Intent
+import android.media.AudioManager
 import android.util.Log
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
@@ -17,6 +19,7 @@ import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.nextcloud.musicplayer.MainActivity
 import com.nextcloud.musicplayer.NextcloudMusicApp
+import com.nextcloud.musicplayer.ui.player.VolumeSyncManager
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -52,6 +55,14 @@ class MusicPlaybackService : MediaSessionService() {
             .build()
 
         player.addListener(object : Player.Listener {
+            override fun onVolumeChanged(volume: Float) {
+                Log.d(TAG, "ExoPlayer onVolumeChanged: volume=$volume")
+            }
+
+            override fun onDeviceVolumeChanged(volume: Int, muted: Boolean) {
+                Log.d(TAG, "ExoPlayer onDeviceVolumeChanged: volume=$volume, muted=$muted")
+            }
+
             override fun onPlayerError(error: PlaybackException) {
                 Log.e(TAG, "ExoPlayer error [${error.errorCodeName} / ${error.errorCode}]: ${error.message}", error)
             }
@@ -117,6 +128,20 @@ class MusicPlaybackService : MediaSessionService() {
 
     override fun onDestroy() {
         serviceScope.cancel()
+        try {
+            val prefs = getSharedPreferences("volume_sync_prefs", Context.MODE_PRIVATE)
+            if (prefs.getBoolean(VolumeSyncManager.KEY_SYSTEM_MAXED, false)) {
+                val savedSysVol = prefs.getInt(VolumeSyncManager.KEY_SAVED_SYS_VOL, -1)
+                if (savedSysVol >= 0) {
+                    val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+                    am?.setStreamVolume(AudioManager.STREAM_MUSIC, savedSysVol, 0)
+                    prefs.edit().putBoolean(VolumeSyncManager.KEY_SYSTEM_MAXED, false).apply()
+                    Log.d(TAG, "MusicPlaybackService onDestroy: 已安全還原系統音量至 $savedSysVol")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "onDestroy 系統音量清理失敗", e)
+        }
         mediaSession?.run {
             player.release()
             release()

@@ -90,11 +90,10 @@ class PlayerController(
                 mediaController = controller
                 setupPlayerListener(controller)
                 updateStateFromPlayer(controller)
-                pendingVolume?.let { vol ->
-                    controller.volume = vol
-                    pendingVolume = null
-                }
-                Log.d(TAG, "MediaController 已成功連線")
+                val vol = pendingVolume ?: currentVolume
+                controller.volume = vol
+                pendingVolume = null
+                Log.d(TAG, "MediaController 已成功連線，套用音量: $vol")
                 onConnected?.invoke(controller)
             } catch (e: Exception) {
                 Log.e(TAG, "MediaController 連線失敗", e)
@@ -461,20 +460,25 @@ class PlayerController(
         }
     }
 
+    private var currentVolume: Float = 1.0f
     private var pendingVolume: Float? = null
 
     fun setVolume(volume: Float) {
         val clamped = volume.coerceIn(0f, 1f)
+        currentVolume = clamped
         val controller = mediaController
+        Log.d(TAG, "setVolume called: volume=$volume, clamped=$clamped, controller=$controller")
         if (controller != null) {
             controller.volume = clamped
+            Log.d(TAG, "setVolume applied to controller: controller.volume=${controller.volume}")
         } else {
             pendingVolume = clamped
+            Log.d(TAG, "setVolume deferred: pendingVolume=$clamped")
         }
     }
 
     fun getVolume(): Float {
-        return mediaController?.volume ?: pendingVolume ?: 1.0f
+        return mediaController?.volume ?: pendingVolume ?: currentVolume
     }
 
     fun disconnect() {

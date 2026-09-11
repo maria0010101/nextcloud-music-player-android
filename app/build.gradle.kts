@@ -12,8 +12,8 @@ android {
         applicationId = "com.nextcloud.musicplayer"
         minSdk = 26
         targetSdk = 36
-        versionCode = 7
-        versionName = "0.6"
+        versionCode = 8
+        versionName = "0.6.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

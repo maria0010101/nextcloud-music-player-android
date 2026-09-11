@@ -1,5 +1,6 @@
 package com.nextcloud.musicplayer.ui.player
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -33,23 +34,26 @@ class PlayerViewModel(
     private var hudDismissJob: Job? = null
 
     init {
-        var previousSteps = AppSettingsDataStore.DEFAULT_VOLUME_STEPS
+        var previousSteps: Int? = null
         viewModelScope.launch {
             volumeSteps.collect { steps ->
-                if (steps == 25 || steps == 50) {
-                    if (previousSteps != steps) {
-                        val initialStep = volumeSyncManager.onEnterForeground(steps)
-                        _currentStep.value = initialStep
+                if (previousSteps == null) {
+                    previousSteps = steps
+                    if (steps == 25 || steps == 50) {
+                        _currentStep.value = volumeSyncManager.onEnterForeground(steps)
+                    } else {
+                        playerController.setVolume(1.0f)
                     }
-                } else {
-                    if (previousSteps == 25 || previousSteps == 50) {
-                        volumeSyncManager.onExitForeground(_currentStep.value, previousSteps)
+                } else if (previousSteps != steps) {
+                    val oldSteps = previousSteps!!
+                    val newStep = volumeSyncManager.onStepsChanged(_currentStep.value, oldSteps, steps)
+                    _currentStep.value = newStep
+                    previousSteps = steps
+                    if (steps != 25 && steps != 50) {
+                        _showVolumeHud.value = false
+                        hudDismissJob?.cancel()
                     }
-                    playerController.setVolume(1.0f)
-                    _showVolumeHud.value = false
-                    hudDismissJob?.cancel()
                 }
-                previousSteps = steps
             }
         }
     }
@@ -70,9 +74,7 @@ class PlayerViewModel(
      */
     fun onAppBackground() {
         val steps = volumeSteps.value
-        if (steps == 25 || steps == 50) {
-            volumeSyncManager.onExitForeground(_currentStep.value, steps)
-        }
+        volumeSyncManager.onExitForeground(_currentStep.value, steps)
     }
 
     /**
@@ -80,6 +82,7 @@ class PlayerViewModel(
      */
     fun adjustVolume(isIncrement: Boolean) {
         val maxSteps = volumeSteps.value
+        Log.d("PlayerViewModel", "adjustVolume: isIncrement=$isIncrement, currentStep=${_currentStep.value}, maxSteps=$maxSteps")
         if (maxSteps != 25 && maxSteps != 50) return
 
         val newStep = if (isIncrement) {
@@ -97,6 +100,7 @@ class PlayerViewModel(
      */
     fun setVolumeFraction(fraction: Float) {
         val maxSteps = volumeSteps.value
+        Log.d("PlayerViewModel", "setVolumeFraction: fraction=$fraction, maxSteps=$maxSteps")
         if (maxSteps != 25 && maxSteps != 50) return
 
         val targetStep = (fraction.coerceIn(0f, 1f) * maxSteps).roundToInt()
@@ -106,8 +110,10 @@ class PlayerViewModel(
 
     private fun setVolumeStepInternal(step: Int, maxSteps: Int) {
         _currentStep.value = step
-        val floatVol = step.toFloat() / maxSteps.toFloat()
+        val floatVol = VolumeSyncManager.stepToFloatVolume(step, maxSteps)
+        Log.d("PlayerViewModel", "setVolumeStepInternal: step=$step/$maxSteps -> floatVol=$floatVol")
         playerController.setVolume(floatVol)
+        volumeSyncManager.updateCurrentStep(step, maxSteps)
     }
 
     /**

@@ -61,6 +61,7 @@ class MainActivity : ComponentActivity() {
         // 確保播放控制器保持連線
         app.playerController.connect()
 
+
         setContent {
             val windowSizeClass = calculateWindowSizeClass(this)
             NextcloudMusicTheme {

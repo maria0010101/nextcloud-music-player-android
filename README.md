@@ -24,6 +24,21 @@ Many private cloud music solutions require dedicated server-side extensions (suc
 
 ---
 
+## 🚀 What's New in v0.6.1
+
+- 🔊 **Acoustic Decibel Calibration & Whisper-Quiet Playback (`stepToFloatVolume`)**:
+  - **Logarithmic Decibel Curve**: Replaced linear volume division (`step / maxSteps`) with a human hearing calibrated decibel curve ($amplitude = 10^{\frac{targetDb}{20}}$).
+  - **Whisper-Quiet Low-End Output**: Calibrated the minimum audible step (`step 1`) to $-56.0\text{ dB}$ (linear amplitude $\approx 0.00158$), perfectly matching Android's native system step 1 ($\approx -54.1\text{ dB}$). Eliminates the issue where low volume settings previously blasted loudly at $-28\text{ dB}$, enabling delicate, whisper-quiet playback for late-night listening.
+  - **Equal Perceptual Step Progression**: Custom steps are distributed linearly in decibels ($\sim 2.3\text{ dB}$ increments for 25 steps; $\sim 1.1\text{ dB}$ for 50 steps), delivering natural, smooth perceived loudness across the entire dynamic range.
+- 🛡️ **Staggered Volume Handover & Switching Surge Elimination (`VolumeSyncManager`)**:
+  - **Eliminated App-Switching Volume Surges (爆音修復)**: Fixed a momentary volume explosion when switching back to the app from the desktop. Previously, the hardware system volume was set to maximum (`maxSys`) synchronously before ExoPlayer software attenuation could take effect over Binder IPC, causing buffered $1.0\text{f}$ full-amplitude PCM audio to play at 100% hardware gain for 100~150ms.
+  - **150ms Buffer Drain Handover**: When entering the foreground, ExoPlayer software attenuation is dispatched first; elevation of the system volume base to `maxSys` is safely delayed by 150ms to allow residual audio in the `AudioTrack` ring buffer to drain at low system gain. Peak acoustic volume during app transition never exceeds the target level.
+  - **Bi-Directional Decibel Mapping (`getStreamVolumeDb`)**: Queries the system's actual hardware attenuation curve across speakers, wired headsets, and Bluetooth A2DP via Android `AudioManager` on API 28+ (with an exponential fallback model for earlier versions), ensuring seamless, glitch-free volume parity when transitioning between the app and the desktop.
+- 🛡️ **Abnormal Termination & Service Cleanup Safeguards**:
+  - **Automatic System Volume Restoration**: In `MusicPlaybackService.onDestroy()` and `VolumeSyncManager.init()`, added detection for ungraceful exits, ensuring the device's system volume is automatically restored to its original level and never left permanently maxed at 150.
+
+---
+
 ## 🚀 What's New in v0.6
 
 - 🎚️ **Custom High-Precision Volume Control (25 / 50 Steps)**:
@@ -213,7 +228,7 @@ Ensures artwork is always displayed using a 4-tier resolution pipeline:
 
 ### Download
 You can download the pre-compiled, signed APK directly from GitHub Releases:
-- 👉 **[Download NextcloudPlayer-v0.4.apk](https://github.com/maria0010101/nextcloud-music-player-android/releases/latest)**
+- 👉 **[Download NextcloudPlayer-v0.6.1.apk](https://github.com/maria0010101/nextcloud-music-player-android/releases/latest)**
 
 ---
 
