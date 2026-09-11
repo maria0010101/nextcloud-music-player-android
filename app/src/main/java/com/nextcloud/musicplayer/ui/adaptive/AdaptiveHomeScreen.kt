@@ -31,6 +31,8 @@ import com.nextcloud.musicplayer.ui.settings.SettingsViewModel
 import java.net.URLDecoder
 import java.net.URLEncoder
 
+import com.nextcloud.musicplayer.ui.player.PlayerViewModel
+
 /**
  * 頂層自適應切換容器 (AdaptiveHomeScreen)
  * 1. 平板 / 橫向大螢幕 (Width >= 840dp，Expanded)：啟用全螢幕水平三欄並排佈局 (TabletThreePaneLayout)，
@@ -42,6 +44,7 @@ import java.net.URLEncoder
 fun AdaptiveHomeScreen(
     widthSizeClass: WindowWidthSizeClass,
     app: NextcloudMusicApp,
+    playerViewModel: PlayerViewModel? = null,
     onLogout: () -> Unit
 ) {
     val repository = app.musicRepository
@@ -72,6 +75,7 @@ fun AdaptiveHomeScreen(
             prefsManager = prefs,
             cacheManager = cacheManager,
             dataStoreManager = dataStoreManager,
+            onOpenSoundEffects = { playerViewModel?.openSoundEffects() },
             onLogout = onLogout
         )
     } else {
@@ -81,6 +85,7 @@ fun AdaptiveHomeScreen(
         PhoneModeLayout(
             albumListViewModel = albumListViewModel,
             app = app,
+            playerViewModel = playerViewModel,
             onLogout = onLogout
         )
     }
@@ -91,6 +96,7 @@ fun AdaptiveHomeScreen(
 private fun PhoneModeLayout(
     albumListViewModel: AlbumListViewModel,
     app: NextcloudMusicApp,
+    playerViewModel: PlayerViewModel? = null,
     onLogout: () -> Unit
 ) {
     val context = LocalContext.current
@@ -194,6 +200,7 @@ private fun PhoneModeLayout(
                     }
                     SettingsScreen(
                         viewModel = settingsViewModel,
+                        onOpenSoundEffects = { playerViewModel?.openSoundEffects() },
                         onBack = { navController.popBackStack() },
                         onLogout = onLogout
                     )
@@ -209,6 +216,7 @@ private fun PhoneModeLayout(
             ) {
                 PlayerScreen(
                     playerController = playerController,
+                    onOpenSoundEffects = { playerViewModel?.openSoundEffects() },
                     onDismiss = { isPlayerSheetVisible = false }
                 )
             }

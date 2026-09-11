@@ -1,9 +1,14 @@
 package com.nextcloud.musicplayer.ui.player
 
+import android.content.Context
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.nextcloud.musicplayer.audio.AudioEffectManager
+import com.nextcloud.musicplayer.audio.HeadphoneProfile
+import com.nextcloud.musicplayer.audio.SoundProfileManager
+import com.nextcloud.musicplayer.audio.VolumeStepManager
 import com.nextcloud.musicplayer.core.settings.AppSettingsDataStore
 import com.nextcloud.musicplayer.playback.PlayerController
 import kotlinx.coroutines.Job
@@ -19,8 +24,12 @@ import kotlin.math.roundToInt
 class PlayerViewModel(
     val playerController: PlayerController,
     private val appSettingsDataStore: AppSettingsDataStore,
-    private val volumeSyncManager: VolumeSyncManager
+    val volumeStepManager: VolumeStepManager,
+    val audioEffectManager: AudioEffectManager,
+    val soundProfileManager: SoundProfileManager
 ) : ViewModel() {
+
+    private val TAG = "PlayerViewModel"
 
     val volumeSteps: StateFlow<Int> = appSettingsDataStore.volumeSteps
         .stateIn(viewModelScope, SharingStarted.Eagerly, AppSettingsDataStore.DEFAULT_VOLUME_STEPS)
@@ -31,29 +40,18 @@ class PlayerViewModel(
     private val _showVolumeHud = MutableStateFlow(false)
     val showVolumeHud: StateFlow<Boolean> = _showVolumeHud.asStateFlow()
 
+    // 彈出音訊等化器與耳機音質設定 Bottom Sheet
+    private val _showSoundEffectsSheet = MutableStateFlow(false)
+    val showSoundEffectsSheet: StateFlow<Boolean> = _showSoundEffectsSheet.asStateFlow()
+
     private var hudDismissJob: Job? = null
 
     init {
-        var previousSteps: Int? = null
         viewModelScope.launch {
             volumeSteps.collect { steps ->
-                if (previousSteps == null) {
-                    previousSteps = steps
-                    if (steps == 25 || steps == 50) {
-                        _currentStep.value = volumeSyncManager.onEnterForeground(steps)
-                    } else {
-                        playerController.setVolume(1.0f)
-                    }
-                } else if (previousSteps != steps) {
-                    val oldSteps = previousSteps!!
-                    val newStep = volumeSyncManager.onStepsChanged(_currentStep.value, oldSteps, steps)
-                    _currentStep.value = newStep
-                    previousSteps = steps
-                    if (steps != 25 && steps != 50) {
-                        _showVolumeHud.value = false
-                        hudDismissJob?.cancel()
-                    }
-                }
+                val step = volumeStepManager.onEnterForeground(steps)
+                _currentStep.value = step
+                Log.d(TAG, "音量精度步數切換至: $steps 段, 當前步長對齊為: $step")
             }
         }
     }
@@ -63,18 +61,15 @@ class PlayerViewModel(
      */
     fun onAppForeground() {
         val steps = volumeSteps.value
-        if (steps == 25 || steps == 50) {
-            val initialStep = volumeSyncManager.onEnterForeground(steps)
-            _currentStep.value = initialStep
-        }
+        val initialStep = volumeStepManager.onEnterForeground(steps)
+        _currentStep.value = initialStep
     }
 
     /**
-     * App 退出／退至背景：還原系統音量 (Step -> AudioManager)
+     * App 退出／退至背景：零爆音狀態維持
      */
     fun onAppBackground() {
-        val steps = volumeSteps.value
-        volumeSyncManager.onExitForeground(_currentStep.value, steps)
+        volumeStepManager.onEnterBackground()
     }
 
     /**
@@ -82,16 +77,15 @@ class PlayerViewModel(
      */
     fun adjustVolume(isIncrement: Boolean) {
         val maxSteps = volumeSteps.value
-        Log.d("PlayerViewModel", "adjustVolume: isIncrement=$isIncrement, currentStep=${_currentStep.value}, maxSteps=$maxSteps")
-        if (maxSteps != 25 && maxSteps != 50) return
+        Log.d(TAG, "adjustVolume: isIncrement=$isIncrement, currentStep=${_currentStep.value}, maxSteps=$maxSteps")
 
         val newStep = if (isIncrement) {
-            (_currentStep.value + 1).coerceAtMost(maxSteps)
+            volumeStepManager.stepUp(maxSteps)
         } else {
-            (_currentStep.value - 1).coerceAtLeast(0)
+            volumeStepManager.stepDown(maxSteps)
         }
 
-        setVolumeStepInternal(newStep, maxSteps)
+        _currentStep.value = newStep
         triggerVolumeHud()
     }
 
@@ -100,9 +94,6 @@ class PlayerViewModel(
      */
     fun setVolumeFraction(fraction: Float) {
         val maxSteps = volumeSteps.value
-        Log.d("PlayerViewModel", "setVolumeFraction: fraction=$fraction, maxSteps=$maxSteps")
-        if (maxSteps != 25 && maxSteps != 50) return
-
         val targetStep = (fraction.coerceIn(0f, 1f) * maxSteps).roundToInt()
         setVolumeStepInternal(targetStep, maxSteps)
         triggerVolumeHud()
@@ -110,10 +101,15 @@ class PlayerViewModel(
 
     private fun setVolumeStepInternal(step: Int, maxSteps: Int) {
         _currentStep.value = step
-        val floatVol = VolumeSyncManager.stepToFloatVolume(step, maxSteps)
-        Log.d("PlayerViewModel", "setVolumeStepInternal: step=$step/$maxSteps -> floatVol=$floatVol")
-        playerController.setVolume(floatVol)
-        volumeSyncManager.updateCurrentStep(step, maxSteps)
+        volumeStepManager.setStep(step, maxSteps)
+    }
+
+    fun openSoundEffects() {
+        _showSoundEffectsSheet.value = true
+    }
+
+    fun dismissSoundEffects() {
+        _showSoundEffectsSheet.value = false
     }
 
     /**
@@ -135,13 +131,22 @@ class PlayerViewModel(
 
     companion object {
         fun provideFactory(
+            context: Context,
             playerController: PlayerController,
-            appSettingsDataStore: AppSettingsDataStore,
-            volumeSyncManager: VolumeSyncManager
+            appSettingsDataStore: AppSettingsDataStore
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                return PlayerViewModel(playerController, appSettingsDataStore, volumeSyncManager) as T
+                val stepManager = VolumeStepManager(context, playerController)
+                val effectManager = AudioEffectManager.getInstance(context)
+                val profileManager = SoundProfileManager.getInstance(context)
+                return PlayerViewModel(
+                    playerController,
+                    appSettingsDataStore,
+                    stepManager,
+                    effectManager,
+                    profileManager
+                ) as T
             }
         }
     }

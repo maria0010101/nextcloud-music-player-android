@@ -24,6 +24,30 @@ Many private cloud music solutions require dedicated server-side extensions (suc
 
 ---
 
+## 🚀 What's New in v0.7.0
+
+- 🎛️ **Professional Audio DSP Engine & 32steps Architecture Overhaul**:
+  - **Burst-Free Continuous Volume Stepping (`VolumeStepManager`)**:
+    Completely replaced the legacy `VolumeSyncManager` (which previously forced system volume to maximum in the foreground, causing audio buffer explosions/bursts and sync desynchronization across app switches).
+    Adopted the proven architecture of [nulldio/32steps](https://github.com/nulldio/32steps): dynamically maps any custom step count ($N \in \{15, 25, 30, 50, 100\}$) to the natural hardware system volume level ($\lceil \text{fraction} \times \text{sysMax} \rceil$) and applies smooth micro-step DSP software attenuation ($-3.0\text{ dB}$ per fractional system unit). System volume is never forced to max, ensuring 100% burst-free (無爆音), continuous, and seamless volume control across foreground, background, and lockscreen.
+  - 🎧 **AutoEq Headphone Sound Profiles (6,000+ Calibrated Models)**:
+    - Integrated the comprehensive AutoEq database with over 6,000 calibrated headphone and in-ear monitor (IEM) frequency response profiles bundled offline in `headphones.dat` (gzip JSON, 174 KB).
+    - Fast instant search dialog with real-time query filtering, category badges, preamp gain compensation, and one-tap selection.
+    - Mathematical logarithmic frequency interpolation (`BiquadMath.interpolateToGrid`) transforming parametric EQ target curves into pre-equalization filters.
+  - 📊 **10-Band Graphic Equalizer (`DynamicsProcessing`)**:
+    - Hardware-accelerated 10-band graphic equalizer (31 Hz, 62 Hz, 125 Hz, 250 Hz, 500 Hz, 1 kHz, 2 kHz, 4 kHz, 8 kHz, 16 kHz) directly attached to ExoPlayer's `audioSessionId` via Android `DynamicsProcessing` (API 28+) with a fallback to `Equalizer`.
+    - 10 curated sound presets: Flat, Bass Boost, Treble Boost, Vocal, Acoustic, Rock, Electronic, Classical, Jazz, and Pop, plus full custom slider control (-12 dB to +12 dB with real-time dB readouts).
+    - One-click "Reset EQ to Flat" button for instant reset.
+  - ⚖️ **Stereo Channel Balance (Left / Right Panning)**:
+    - Dedicated channel balance slider (-1.0 to +1.0) with real-time percentage indicators ("左偏 50%", "右偏 50%", "置中 (平衡)") and quick one-tap "Reset to Center" action.
+    - Applied via limiter post-gain channel attenuation in the DSP pipeline.
+  - 🎚️ **Floating Volume Overlay HUD & Quick Tune Shortcut**:
+    - Right-edge vertical capsule volume slider HUD displaying current step count badge (e.g. `18 / 50`).
+    - Embedded Tune shortcut button on the HUD for one-tap access to the Audio & Equalizer modal bottom sheet from anywhere in the app.
+    - Also accessible directly from the player toolbar and Settings screen.
+
+---
+
 ## 🚀 What's New in v0.6.1
 
 - 🔊 **Acoustic Decibel Calibration & Whisper-Quiet Playback (`stepToFloatVolume`)**:
@@ -277,7 +301,7 @@ To compile and build the application yourself:
 
 - [ ] Custom Playlist creation and management
 - [ ] Synchronized Lyrics (`.lrc` files and embedded USLT tags)
-- [ ] Built-in Equalizer (EQ) and audio effects
+- [x] Built-in Equalizer (10-Band Graphic EQ), AutoEq headphone sound profiles, and Channel balance
 - [ ] Android Auto integration
 - [ ] Sleep timer feature
 - [ ] Scrobbling support (ListenBrainz / Last.fm)

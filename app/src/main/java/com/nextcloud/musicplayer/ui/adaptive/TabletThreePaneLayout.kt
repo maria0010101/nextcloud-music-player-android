@@ -71,6 +71,7 @@ fun TabletThreePaneLayout(
     prefsManager: SecurePreferencesManager,
     cacheManager: PlaybackCacheManager,
     dataStoreManager: DataStoreManager,
+    onOpenSoundEffects: () -> Unit = {},
     onLogout: () -> Unit
 ) {
     val context = LocalContext.current
@@ -514,13 +515,26 @@ fun TabletThreePaneLayout(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = if (isCompactHeight) Arrangement.spacedBy(8.dp) else Arrangement.SpaceEvenly
                 ) {
-                    // 1. 標頭
-                    Text(
-                        text = "現正播放",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontWeight = FontWeight.SemiBold
-                    )
+                    // 1. 標頭與音效設定按鈕
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "現正播放",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        IconButton(onClick = onOpenSoundEffects) {
+                            Icon(
+                                imageVector = Icons.Default.Tune,
+                                contentDescription = "音效與等化器",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
 
                     // 2. 大尺寸專輯封面圖 (支援點擊放大與緩衝覆蓋層)
                     val effectiveCoverUrl = currentTrack?.coverUrl ?: selectedAlbum?.coverUrl
@@ -813,6 +827,7 @@ fun TabletThreePaneLayout(
                 }
                 SettingsScreen(
                     viewModel = settingsViewModel,
+                    onOpenSoundEffects = onOpenSoundEffects,
                     onBack = { showSettingsDialog = false },
                     onLogout = {
                         showSettingsDialog = false

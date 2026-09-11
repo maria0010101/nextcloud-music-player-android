@@ -19,7 +19,7 @@ import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.nextcloud.musicplayer.MainActivity
 import com.nextcloud.musicplayer.NextcloudMusicApp
-import com.nextcloud.musicplayer.ui.player.VolumeSyncManager
+import com.nextcloud.musicplayer.audio.AudioEffectManager
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -54,7 +54,18 @@ class MusicPlaybackService : MediaSessionService() {
             .setWakeMode(C.WAKE_MODE_NETWORK)         // 串流播放時維持 CPU 喚醒
             .build()
 
+        if (player.audioSessionId > 0) {
+            AudioEffectManager.getInstance(applicationContext).attachSession(player.audioSessionId)
+        }
+
         player.addListener(object : Player.Listener {
+            override fun onAudioSessionIdChanged(audioSessionId: Int) {
+                Log.d(TAG, "ExoPlayer onAudioSessionIdChanged: audioSessionId=$audioSessionId")
+                if (audioSessionId > 0) {
+                    AudioEffectManager.getInstance(applicationContext).attachSession(audioSessionId)
+                }
+            }
+
             override fun onVolumeChanged(volume: Float) {
                 Log.d(TAG, "ExoPlayer onVolumeChanged: volume=$volume")
             }
@@ -129,18 +140,11 @@ class MusicPlaybackService : MediaSessionService() {
     override fun onDestroy() {
         serviceScope.cancel()
         try {
-            val prefs = getSharedPreferences("volume_sync_prefs", Context.MODE_PRIVATE)
-            if (prefs.getBoolean(VolumeSyncManager.KEY_SYSTEM_MAXED, false)) {
-                val savedSysVol = prefs.getInt(VolumeSyncManager.KEY_SAVED_SYS_VOL, -1)
-                if (savedSysVol >= 0) {
-                    val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-                    am?.setStreamVolume(AudioManager.STREAM_MUSIC, savedSysVol, 0)
-                    prefs.edit().putBoolean(VolumeSyncManager.KEY_SYSTEM_MAXED, false).apply()
-                    Log.d(TAG, "MusicPlaybackService onDestroy: 已安全還原系統音量至 $savedSysVol")
-                }
+            if (::player.isInitialized && player.audioSessionId > 0) {
+                AudioEffectManager.getInstance(applicationContext).detachSession(player.audioSessionId)
             }
         } catch (e: Exception) {
-            Log.e(TAG, "onDestroy 系統音量清理失敗", e)
+            Log.e(TAG, "AudioEffectManager detachSession 失敗", e)
         }
         mediaSession?.run {
             player.release()

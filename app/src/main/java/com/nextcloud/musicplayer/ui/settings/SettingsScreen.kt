@@ -25,6 +25,7 @@ import com.nextcloud.musicplayer.ui.folder.FolderPickerDialog
 @Composable
 fun SettingsScreen(
     viewModel: SettingsViewModel,
+    onOpenSoundEffects: () -> Unit = {},
     onBack: () -> Unit,
     onLogout: () -> Unit
 ) {
@@ -402,7 +403,41 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(28.dp))
 
-            // 5. 音量調節精度
+            // 5. 音效與等化器 (AutoEq 耳機校準、10 頻段等化器、聲道平衡)
+            Text(
+                text = "音訊效果與等化器",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "AutoEq 耳機音質校準、10 頻段圖形等化器與立體聲聲道平衡",
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Button(
+                        onClick = onOpenSoundEffects,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Icon(Icons.Default.Tune, contentDescription = null)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("開啟音訊等化器與耳機音質調整")
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(28.dp))
+
+            // 6. 音量調節精度 (32steps 架構)
             Text(
                 text = "音量調節精度",
                 style = MaterialTheme.typography.titleMedium,
@@ -416,13 +451,15 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text("App 前台自訂音量段數（退至背景或關閉時自動還原系統原生設定）", style = MaterialTheme.typography.labelMedium)
+                    Text("自訂音量段數（採用 32steps 微步階 DSP 衰減演算法，切換平滑無爆音）", style = MaterialTheme.typography.labelMedium)
                     Spacer(modifier = Modifier.height(8.dp))
 
                     val volumeOptions = listOf(
                         15 to "預設（依循系統 15 段）",
                         25 to "高精度 25 段",
-                        50 to "超高精度 50 段"
+                        30 to "進階 30 段",
+                        50 to "超高精度 50 段",
+                        100 to "極致精準 100 段"
                     )
 
                     volumeOptions.forEach { (steps, label) ->

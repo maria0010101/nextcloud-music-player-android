@@ -1,5 +1,6 @@
 package com.nextcloud.musicplayer.ui.player
 
+import android.view.HapticFeedbackConstants
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -8,6 +9,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
@@ -18,14 +20,15 @@ import androidx.compose.material.icons.automirrored.filled.VolumeDown
 import androidx.compose.material.icons.automirrored.filled.VolumeMute
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
@@ -37,9 +40,7 @@ fun VolumeHud(
     val showHud by playerViewModel.showVolumeHud.collectAsState()
     val volumeSteps by playerViewModel.volumeSteps.collectAsState()
     val currentStep by playerViewModel.currentStep.collectAsState()
-
-    // 僅在 25 或 50 段自訂精度模式下啟用浮動音量條
-    if (volumeSteps != 25 && volumeSteps != 50) return
+    val view = LocalView.current
 
     val targetFraction = if (volumeSteps > 0) {
         (currentStep.toFloat() / volumeSteps.toFloat()).coerceIn(0f, 1f)
@@ -72,8 +73,7 @@ fun VolumeHud(
                 shape = RoundedCornerShape(12.dp),
                 color = MaterialTheme.colorScheme.surfaceVariant,
                 tonalElevation = 6.dp,
-                shadowElevation = 8.dp,
-                border = null
+                shadowElevation = 8.dp
             ) {
                 Text(
                     text = "$currentStep / $volumeSteps",
@@ -86,7 +86,7 @@ fun VolumeHud(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // 仿 Android 原生垂直膠囊音量條
+            // 垂直膠囊音量條 (Volume Overlay Capsule)
             Box(
                 modifier = Modifier
                     .width(50.dp)
@@ -96,6 +96,7 @@ fun VolumeHud(
                     .background(MaterialTheme.colorScheme.surfaceVariant)
                     .pointerInput(volumeSteps) {
                         detectTapGestures { offset ->
+                            view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
                             val fraction = (1f - (offset.y / size.height)).coerceIn(0f, 1f)
                             playerViewModel.setVolumeFraction(fraction)
                         }
@@ -103,6 +104,7 @@ fun VolumeHud(
                     .pointerInput(volumeSteps) {
                         detectVerticalDragGestures(
                             onDragStart = { offset ->
+                                view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
                                 val fraction = (1f - (offset.y / size.height)).coerceIn(0f, 1f)
                                 playerViewModel.setVolumeFraction(fraction)
                             },
@@ -153,6 +155,32 @@ fun VolumeHud(
                         contentDescription = "音量",
                         tint = iconTint,
                         modifier = Modifier.size(24.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // 音效與等化器快捷捷徑小圓鈕
+            Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                shadowElevation = 6.dp,
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .clickable {
+                        view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                        playerViewModel.dismissVolumeHud()
+                        playerViewModel.openSoundEffects()
+                    }
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = Icons.Default.Tune,
+                        contentDescription = "開啟等化器",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
                     )
                 }
             }

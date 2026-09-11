@@ -26,6 +26,7 @@ import java.util.Locale
 @Composable
 fun PlayerScreen(
     playerController: PlayerController,
+    onOpenSoundEffects: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val currentTrack by playerController.currentTrack.collectAsState()
@@ -58,6 +59,15 @@ fun PlayerScreen(
                             Icons.Default.KeyboardArrowDown,
                             contentDescription = "收起",
                             modifier = Modifier.size(32.dp)
+                        )
+                    }
+                },
+                actions = {
+                    IconButton(onClick = onOpenSoundEffects) {
+                        Icon(
+                            Icons.Default.Tune,
+                            contentDescription = "音效與等化器",
+                            tint = MaterialTheme.colorScheme.primary
                         )
                     }
                 }

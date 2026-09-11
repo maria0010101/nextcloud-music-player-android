@@ -22,8 +22,8 @@ import com.nextcloud.musicplayer.ui.adaptive.AdaptiveHomeScreen
 import com.nextcloud.musicplayer.ui.auth.LoginScreen
 import com.nextcloud.musicplayer.ui.auth.LoginViewModel
 import com.nextcloud.musicplayer.ui.player.PlayerViewModel
+import com.nextcloud.musicplayer.ui.player.SoundEffectsBottomSheet
 import com.nextcloud.musicplayer.ui.player.VolumeHud
-import com.nextcloud.musicplayer.ui.player.VolumeSyncManager
 import com.nextcloud.musicplayer.ui.theme.NextcloudMusicTheme
 
 class MainActivity : ComponentActivity() {
@@ -50,20 +50,20 @@ class MainActivity : ComponentActivity() {
         val app = application as NextcloudMusicApp
         val prefs = app.securePreferencesManager
         val loginFlowClient = app.loginFlowClient
-        val volumeSyncManager = VolumeSyncManager(this, app.playerController)
 
-        // 初始化全域 PlayerViewModel（音量管理與 HUD 控制）
+        // 初始化全域 PlayerViewModel（音量管理、HUD 控制與等化器音效）
         playerViewModel = ViewModelProvider(
             this,
-            PlayerViewModel.provideFactory(app.playerController, app.appSettingsDataStore, volumeSyncManager)
+            PlayerViewModel.provideFactory(this, app.playerController, app.appSettingsDataStore)
         )[PlayerViewModel::class.java]
 
         // 確保播放控制器保持連線
         app.playerController.connect()
 
-
         setContent {
             val windowSizeClass = calculateWindowSizeClass(this)
+            val showSoundEffectsSheet by playerViewModel.showSoundEffectsSheet.collectAsState()
+
             NextcloudMusicTheme {
                 Box(modifier = Modifier.fillMaxSize()) {
                     var isLoggedIn by remember { mutableStateOf(prefs.hasCredentials()) }
@@ -72,6 +72,7 @@ class MainActivity : ComponentActivity() {
                         AdaptiveHomeScreen(
                             widthSizeClass = windowSizeClass.widthSizeClass,
                             app = app,
+                            playerViewModel = playerViewModel,
                             onLogout = {
                                 prefs.clear()
                                 isLoggedIn = false
@@ -89,11 +90,19 @@ class MainActivity : ComponentActivity() {
                         )
                     }
 
-                    // 根層級懸浮音量控制條（僅在 25 或 50 段模式且按鍵調節時彈出）
+                    // 根層級懸浮音量控制條 (Volume Overlay HUD)
                     VolumeHud(
                         playerViewModel = playerViewModel,
                         modifier = Modifier.align(Alignment.CenterEnd)
                     )
+
+                    // 10 頻段等化器、AutoEq 耳機音質校準與聲道平衡 Bottom Sheet
+                    if (showSoundEffectsSheet) {
+                        SoundEffectsBottomSheet(
+                            playerViewModel = playerViewModel,
+                            onDismiss = { playerViewModel.dismissSoundEffects() }
+                        )
+                    }
                 }
             }
         }
@@ -101,35 +110,29 @@ class MainActivity : ComponentActivity() {
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
-            val steps = playerViewModel.volumeSteps.value
-            if (steps == 25 || steps == 50) {
-                val isIncrement = (keyCode == KeyEvent.KEYCODE_VOLUME_UP)
-                playerViewModel.adjustVolume(isIncrement)
-                return true
-            }
+            val isIncrement = (keyCode == KeyEvent.KEYCODE_VOLUME_UP)
+            playerViewModel.adjustVolume(isIncrement)
+            return true
         }
         return super.onKeyDown(keyCode, event)
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
         if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
-            val steps = playerViewModel.volumeSteps.value
-            if (steps == 25 || steps == 50) {
-                return true
-            }
+            return true
         }
         return super.onKeyUp(keyCode, event)
     }
 
     override fun onStart() {
         super.onStart()
-        // 啟動／切入前台：對齊系統音量並將系統底座拉滿
+        // 啟動／切入前台：對齊系統音量
         playerViewModel.onAppForeground()
     }
 
     override fun onStop() {
         super.onStop()
-        // 退至背景：還原系統原生音量並復原 ExoPlayer 軟體衰減
+        // 退至背景
         if (!isChangingConfigurations) {
             playerViewModel.onAppBackground()
         }
@@ -137,7 +140,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        // 僅在 Activity 真正關閉（非螢幕旋轉導致之重建）時釋放連線與還原音量
         if (isFinishing) {
             playerViewModel.onAppBackground()
             (application as? NextcloudMusicApp)?.playerController?.disconnect()
