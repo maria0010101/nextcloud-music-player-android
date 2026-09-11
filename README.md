@@ -24,6 +24,29 @@ Many private cloud music solutions require dedicated server-side extensions (suc
 
 ---
 
+## 🚀 What's New in v0.7.1
+
+- 📈 **Interactive 10-Band Graphic Equalizer Response Curve (`GraphicEqView`)**:
+  - **Visual Frequency Response Polyline Chart (折線圖 / 響應圖)**:
+    Replaced the legacy list of 10 individual horizontal sliders with a modern, high-precision visual graphic equalizer interface based on the elegant presentation and ergonomic design by [nulldio/32steps](https://github.com/nulldio/32steps).
+  - **Intuitive Frequency (X) & Gain (Y) Mapping**:
+    - **Horizontal Axis (X)**: 10 standardized audio frequency bands (`31 Hz`, `62 Hz`, `125 Hz`, `250 Hz`, `500 Hz`, `1 kHz`, `2 kHz`, `4 kHz`, `8 kHz`, `16 kHz`).
+    - **Vertical Axis (Y)**: Spans a $-12\text{ dB}$ to $+12\text{ dB}$ dynamic range with horizontal reference grid lines at $+10\text{ dB}$, $+5\text{ dB}$, $0\text{ dB}$ (prominent center reference line), $-5\text{ dB}$, and $-10\text{ dB}$.
+  - **Bi-Directional Rounded Gain Bars & Contour Gradient Fill**:
+    - Vertical rounded bars dynamically extend upwards (for boost) or downwards (for cut) from the $0\text{ dB}$ baseline directly to each frequency node.
+    - Soft, semi-transparent contour gradient fill smoothly shades the area under the response polyline, creating an authentic hardware audio analyzer aesthetic.
+  - **Direct Touch & Drag Interaction with Haptic Feedback**:
+    - Shape frequency response curves effortlessly by touching and dragging any band node up or down with real-time $0.5\text{ dB}$ micro-step precision.
+    - Subtle tactile tick vibration (`HapticFeedbackConstants`) accompanies every $0.5\text{ dB}$ adjustment.
+    - Child gesture isolation (`parent.requestDisallowInterceptTouchEvent(true)`) ensures uninterrupted finger dragging without accidental modal bottom sheet or scroll container gesture conflicts.
+  - **Double-Tap Quick Zero Reset**:
+    - Double-tapping any frequency node instantly resets that specific band back to $0.0\text{ dB}$ without disturbing adjacent bands.
+  - **Smart Non-Clipping Decibel Readout & Master Toggle**:
+    - Numeric gain labels (e.g., `+4.5`, `0.0`, `-3.5`) intelligently flip above or below node points based on vertical position to eliminate edge clipping.
+    - Switching the master EQ toggle smoothly dims the graph and disables touch interaction. The "Reset EQ to Flat" button instantaneously flattens all 10 bands.
+
+---
+
 ## 🚀 What's New in v0.7.0
 
 - 🎛️ **Professional Audio DSP Engine & 32steps Architecture Overhaul**:
@@ -305,6 +328,19 @@ To compile and build the application yourself:
 - [ ] Android Auto integration
 - [ ] Sleep timer feature
 - [ ] Scrobbling support (ListenBrainz / Last.fm)
+
+---
+
+## 💖 Acknowledgements & Credits
+
+We extend our sincere gratitude to the following outstanding open-source projects and authors whose pioneering work made these audio capabilities possible:
+
+- **[nulldio/32steps](https://github.com/nulldio/32steps)** by [@nulldio](https://github.com/nulldio):
+  - Invaluable design and implementation reference for the interactive 10-band graphic equalizer response curve view (`GraphicEqView`), gesture ergonomics (direct drag & double-tap to zero), vertical gain bars, AutoEq integration architecture, and burst-free continuous volume step mapping (`VolumeStepManager`).
+- **[jaakkopasanen/AutoEq](https://github.com/jaakkopasanen/AutoEq)** by Jaakko Pasanen:
+  - The premier open-source database of 6,000+ calibrated headphone frequency response curves and target compensation profiles.
+- **[AndroidX Media3 / ExoPlayer](https://github.com/androidx/media)**:
+  - Robust high-fidelity client-side audio streaming and decoding engine.
 
 ---
 

@@ -19,8 +19,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import com.nextcloud.musicplayer.audio.AudioEffectManager
 import com.nextcloud.musicplayer.audio.HeadphoneProfile
@@ -230,53 +232,49 @@ fun SoundEffectsBottomSheet(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
 
-                    // 10 頻段調節滑桿
-                    AudioEffectManager.BANDS_10.forEachIndexed { index, freq ->
-                        val gain = if (index < eqGains.size) eqGains[index] else 0f
-                        val label = AudioEffectManager.BAND_LABELS[index]
-
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 2.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = label,
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.width(44.dp)
-                            )
-
-                            Slider(
-                                value = gain,
-                                onValueChange = { newGain ->
-                                    audioEffectManager.setBandGain(index, (newGain * 2).roundToInt() / 2f)
-                                },
-                                valueRange = -12.0f..12.0f,
-                                steps = 47,
-                                modifier = Modifier.weight(1f),
-                                enabled = eqEnabled
-                            )
-
-                            Text(
-                                text = String.format(Locale.US, "%+.1f dB", gain),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (gain != 0f) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                fontWeight = if (gain != 0f) FontWeight.Bold else FontWeight.Normal,
-                                modifier = Modifier.width(60.dp)
-                            )
-                        }
-                    }
+                    Text(
+                        text = "點擊或拖曳頻率節點以調整增益 (雙擊節點可重設為 0 dB)",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
 
                     Spacer(modifier = Modifier.height(10.dp))
+
+                    val primaryColor = MaterialTheme.colorScheme.primary.toArgb()
+                    val onSurfaceColor = MaterialTheme.colorScheme.onSurface.toArgb()
+                    val cardBgColor = MaterialTheme.colorScheme.surface.toArgb()
+
+                    // 10 頻段圖形等化器折線圖視圖 (GraphicEqView)
+                    AndroidView(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(240.dp),
+                        factory = { context ->
+                            GraphicEqView(context).apply {
+                                setThemeColors(primaryColor, onSurfaceColor, cardBgColor)
+                                setGains(eqGains)
+                                isEnabled = eqEnabled
+                                listener = GraphicEqView.OnGainChangeListener { index, gain ->
+                                    audioEffectManager.setBandGain(index, gain)
+                                }
+                            }
+                        },
+                        update = { view ->
+                            view.setThemeColors(primaryColor, onSurfaceColor, cardBgColor)
+                            view.isEnabled = eqEnabled
+                            view.setGains(eqGains)
+                        }
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
 
                     OutlinedButton(
                         onClick = { audioEffectManager.resetEq() },
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(10.dp)
+                        shape = RoundedCornerShape(10.dp),
+                        enabled = eqEnabled
                     ) {
                         Icon(Icons.Default.RestartAlt, contentDescription = null)
                         Spacer(modifier = Modifier.width(6.dp))
