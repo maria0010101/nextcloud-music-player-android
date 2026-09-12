@@ -60,6 +60,16 @@ class MusicRepository(
 
     fun getAlbums(): Flow<List<AlbumEntity>> = database.albumDao().getAllAlbums()
 
+    fun getFavoriteAlbums(): Flow<List<AlbumEntity>> = database.albumDao().getFavoriteAlbumsFlow()
+
+    suspend fun getTracksFromFavoriteAlbums(): List<TrackEntity> = withContext(Dispatchers.IO) {
+        database.albumDao().getTracksFromFavoriteAlbums()
+    }
+
+    suspend fun updateAlbumFavorite(albumId: String, isFavorite: Boolean) = withContext(Dispatchers.IO) {
+        database.albumDao().updateFavoriteStatus(albumId, isFavorite)
+    }
+
     fun getTracksForAlbum(albumId: String): Flow<List<TrackEntity>> =
         database.trackDao().getTracksForAlbum(albumId)
 

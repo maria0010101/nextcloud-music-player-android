@@ -98,6 +98,13 @@ class AlbumDetailViewModel(
         observeDownloadProgress(context)
     }
 
+    fun toggleFavorite() {
+        val current = _album.value ?: return
+        viewModelScope.launch {
+            repository.updateAlbumFavorite(albumId, !current.isFavorite)
+        }
+    }
+
     fun playTrack(trackIndex: Int) {
         val currentTracks = tracks.value
         if (currentTracks.isNotEmpty() && trackIndex in currentTracks.indices) {

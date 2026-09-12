@@ -45,7 +45,7 @@ fun FastScrollbar(
     getIndicatorText: (Int) -> String,
     modifier: Modifier = Modifier
 ) {
-    if (totalItemCount <= 0) return
+    if (totalItemCount < 8) return
 
     val density = LocalDensity.current
     val thumbHeightDp = 52.dp
@@ -126,7 +126,7 @@ fun FastScrollbar(
                     isDragging = false
                 }
             }
-            .width(36.dp)
+            .width(16.dp)
             .fillMaxHeight(),
         contentAlignment = Alignment.TopEnd
     ) {
@@ -166,11 +166,13 @@ fun FastScrollbar(
             enter = fadeIn(tween(100)) + scaleIn(tween(100)),
             exit = fadeOut(tween(150)) + scaleOut(tween(150)),
             modifier = Modifier
-                .padding(end = 44.dp)
                 .offset {
                     val bubbleY = (thumbY + (thumbHeightPx - bubbleSizePx) / 2f)
                         .coerceIn(0f, (trackHeightPx - bubbleSizePx).coerceAtLeast(0f))
-                    IntOffset(0, bubbleY.roundToInt())
+                    IntOffset(
+                        x = -(bubbleSizePx + with(density) { 8.dp.toPx() }).roundToInt(),
+                        y = bubbleY.roundToInt()
+                    )
                 }
         ) {
             Surface(

@@ -14,7 +14,8 @@ data class AlbumEntity(
     val isDownloaded: Boolean = false,
     val updatedAt: Long = System.currentTimeMillis(),
     val etag: String? = null,
-    val lastModified: String? = null
+    val lastModified: String? = null,
+    val isFavorite: Boolean = false
 ) {
     val coverUri: String? get() = coverUrl
 }

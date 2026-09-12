@@ -200,7 +200,8 @@ class WebDavSyncRepository(
                             trackCount = sortedAudios.size,
                             isDownloaded = existing?.isDownloaded ?: false,
                             etag = currentFolderEtag,
-                            lastModified = currentFolderLastModified
+                            lastModified = currentFolderLastModified,
+                            isFavorite = existing?.isFavorite ?: false
                         )
                         albumsToInsertOrUpdate.add(album)
 
@@ -344,14 +345,25 @@ class WebDavSyncRepository(
         try {
             onProgress("正在清空本地音樂庫快取...")
             Log.d(TAG, "Performing full rescan: clearing local database")
+            val preservedFavorites = try {
+                database.albumDao().getAllAlbumsList().filter { it.isFavorite }.map { it.id }.toSet()
+            } catch (e: Exception) {
+                emptySet()
+            }
             database.albumDao().clearAlbums()
             database.trackDao().clearTracks()
 
-            incrementalSync(
+            val result = incrementalSync(
                 scopedFolder = scopedFolder,
                 selectedLevels = selectedLevels,
                 onProgress = onProgress
             )
+            if (preservedFavorites.isNotEmpty()) {
+                preservedFavorites.forEach { favId ->
+                    database.albumDao().updateFavoriteStatus(favId, true)
+                }
+            }
+            result
         } catch (e: Exception) {
             Log.e(TAG, "完整重新掃描異常", e)
             Result.failure(e)

@@ -95,6 +95,14 @@ fun AlbumDetailScreen(
                         }
                     }
 
+                    IconButton(onClick = { viewModel.toggleFavorite() }) {
+                        Icon(
+                            imageVector = if (album?.isFavorite == true) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                            contentDescription = if (album?.isFavorite == true) "取消最愛" else "加入最愛",
+                            tint = if (album?.isFavorite == true) MaterialTheme.colorScheme.error else LocalContentColor.current
+                        )
+                    }
+
                     IconButton(onClick = { showCoverSearchSheet = true }) {
                         Icon(Icons.Default.ImageSearch, contentDescription = "線上搜尋封面")
                     }

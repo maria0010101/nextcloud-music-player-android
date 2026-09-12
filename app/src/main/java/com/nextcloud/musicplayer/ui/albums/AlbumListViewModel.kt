@@ -9,6 +9,7 @@ import com.nextcloud.musicplayer.core.security.SecurePreferencesManager
 import com.nextcloud.musicplayer.data.local.entity.AlbumEntity
 import com.nextcloud.musicplayer.data.repository.MusicRepository
 import com.nextcloud.musicplayer.data.sync.SyncLibraryWorker
+import com.nextcloud.musicplayer.playback.PlayerController
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -23,11 +24,15 @@ import kotlinx.coroutines.launch
 class AlbumListViewModel(
     val repository: MusicRepository,
     private val prefsManager: SecurePreferencesManager,
-    private val context: Context? = null
+    private val context: Context? = null,
+    val playerController: PlayerController? = null
 ) : ViewModel() {
 
     val rawAlbums: StateFlow<List<AlbumEntity>> = repository.getAlbums()
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+
+    private val _isFavoriteFilterActive = MutableStateFlow(false)
+    val isFavoriteFilterActive: StateFlow<Boolean> = _isFavoriteFilterActive.asStateFlow()
 
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
@@ -47,11 +52,16 @@ class AlbumListViewModel(
     private val _selectedFolder = MutableStateFlow(prefsManager.getSelectedMusicFolder())
     val selectedFolder: StateFlow<String> = _selectedFolder.asStateFlow()
 
-    val filteredAlbums: StateFlow<List<AlbumEntity>> = combine(rawAlbums, _searchQuery) { albums, query ->
+    val filteredAlbums: StateFlow<List<AlbumEntity>> = combine(
+        rawAlbums,
+        _searchQuery,
+        _isFavoriteFilterActive
+    ) { albums, query, isFavActive ->
+        val base = if (isFavActive) albums.filter { it.isFavorite } else albums
         if (query.isBlank()) {
-            albums
+            base
         } else {
-            albums.filter { it.name.contains(query, ignoreCase = true) }
+            base.filter { it.name.contains(query, ignoreCase = true) }
         }
     }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
@@ -114,6 +124,28 @@ class AlbumListViewModel(
 
     fun toggleGridMode() {
         _isGridMode.value = !_isGridMode.value
+    }
+
+    fun toggleFavoriteFilter() {
+        _isFavoriteFilterActive.value = !_isFavoriteFilterActive.value
+    }
+
+    fun toggleAlbumFavorite(albumId: String, currentFavorite: Boolean) {
+        viewModelScope.launch {
+            repository.updateAlbumFavorite(albumId, !currentFavorite)
+        }
+    }
+
+    fun playFavoriteTracksShuffled(onNoTracks: () -> Unit) {
+        viewModelScope.launch {
+            val tracks = repository.getTracksFromFavoriteAlbums()
+            if (tracks.isEmpty()) {
+                onNoTracks()
+            } else {
+                val shuffled = tracks.shuffled()
+                playerController?.playTracks(shuffled, startIndex = 0)
+            }
+        }
     }
 
     fun updateSelectedFolder(newFolder: String) {

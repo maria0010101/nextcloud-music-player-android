@@ -1,5 +1,7 @@
 package com.nextcloud.musicplayer.ui.albums
 
+import android.widget.Toast
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -9,6 +11,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ViewList
@@ -18,7 +21,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
@@ -33,10 +39,12 @@ fun AlbumListScreen(
     onAlbumClick: (albumId: String) -> Unit,
     onOpenSettings: () -> Unit
 ) {
+    val context = LocalContext.current
     val albums by viewModel.filteredAlbums.collectAsState()
     val isGridMode by viewModel.isGridMode.collectAsState()
     val isSyncing by viewModel.isSyncing.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
+    val isFavoriteFilterActive by viewModel.isFavoriteFilterActive.collectAsState()
 
     val gridState = rememberLazyGridState()
     val listState = rememberLazyListState()
@@ -74,6 +82,15 @@ fun AlbumListScreen(
                         }
                     }
 
+                    // 模組 2：我的最愛過濾按鈕
+                    IconButton(onClick = { viewModel.toggleFavoriteFilter() }) {
+                        Icon(
+                            imageVector = if (isFavoriteFilterActive) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                            contentDescription = if (isFavoriteFilterActive) "顯示全部專輯" else "僅顯示我的最愛",
+                            tint = if (isFavoriteFilterActive) MaterialTheme.colorScheme.error else LocalContentColor.current
+                        )
+                    }
+
                     IconButton(onClick = { viewModel.toggleGridMode() }) {
                         Icon(
                             if (isGridMode) Icons.AutoMirrored.Filled.ViewList else Icons.Default.GridView,
@@ -98,7 +115,7 @@ fun AlbumListScreen(
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { viewModel.setSearchQuery(it) },
-                placeholder = { Text("搜尋專輯或歌手...") },
+                placeholder = { Text(if (isFavoriteFilterActive) "搜尋最愛專輯或歌手..." else "搜尋專輯或歌手...") },
                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                 trailingIcon = {
                     if (searchQuery.isNotEmpty()) {
@@ -113,6 +130,65 @@ fun AlbumListScreen(
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             )
 
+            // 模組 3：我的最愛專屬隨機播放列 (Shuffle All Favorites)
+            if (isFavoriteFilterActive) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                    tonalElevation = 1.dp
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Favorite,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "最愛專輯 (${albums.size})",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
+
+                        FilledTonalButton(
+                            onClick = {
+                                viewModel.playFavoriteTracksShuffled(
+                                    onNoTracks = {
+                                        Toast.makeText(context, "尚未收藏任何專輯或最愛專輯內無歌曲", Toast.LENGTH_SHORT).show()
+                                    }
+                                )
+                            },
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            colors = ButtonDefaults.filledTonalButtonColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary
+                            )
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Shuffle,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("隨機播放最愛歌曲", style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+                }
+            }
+
             if (albums.isEmpty()) {
                 Box(
                     modifier = Modifier
@@ -120,29 +196,57 @@ fun AlbumListScreen(
                         .padding(32.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                            imageVector = Icons.Default.Album,
-                            contentDescription = null,
-                            modifier = Modifier.size(64.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text(
-                            text = if (searchQuery.isNotEmpty()) "查無相關專輯" else "目前音樂庫為空",
-                            style = MaterialTheme.typography.titleMedium
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = "請前往「設定」挑選 Nextcloud 上的音樂專用目錄並執行掃描",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Button(onClick = onOpenSettings) {
-                            Icon(Icons.Default.Settings, contentDescription = null)
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("前往設定頁面")
+                    if (isFavoriteFilterActive) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                imageVector = Icons.Default.FavoriteBorder,
+                                contentDescription = null,
+                                modifier = Modifier.size(64.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                text = if (searchQuery.isNotEmpty()) "查無符合的最愛專輯" else "尚未收藏任何最愛專輯",
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "點擊各專輯卡片上的愛心圖示即可加入收藏",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            OutlinedButton(onClick = { viewModel.toggleFavoriteFilter() }) {
+                                Icon(Icons.AutoMirrored.Filled.ViewList, contentDescription = null)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("顯示全部專輯")
+                            }
+                        }
+                    } else {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                imageVector = Icons.Default.Album,
+                                contentDescription = null,
+                                modifier = Modifier.size(64.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                text = if (searchQuery.isNotEmpty()) "查無相關專輯" else "目前音樂庫為空",
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "請前往「設定」挑選 Nextcloud 上的音樂專用目錄並執行掃描",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Button(onClick = onOpenSettings) {
+                                Icon(Icons.Default.Settings, contentDescription = null)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("前往設定頁面")
+                            }
                         }
                     }
                 }
@@ -158,7 +262,11 @@ fun AlbumListScreen(
                             modifier = Modifier.fillMaxSize()
                         ) {
                             items(albums, key = { it.id }) { album ->
-                                AlbumGridItem(album = album, onClick = { onAlbumClick(album.id) })
+                                AlbumGridItem(
+                                    album = album,
+                                    onToggleFavorite = { viewModel.toggleAlbumFavorite(album.id, album.isFavorite) },
+                                    onClick = { onAlbumClick(album.id) }
+                                )
                             }
                         }
                     } else {
@@ -169,7 +277,11 @@ fun AlbumListScreen(
                             modifier = Modifier.fillMaxSize()
                         ) {
                             items(albums, key = { it.id }) { album ->
-                                AlbumListItem(album = album, onClick = { onAlbumClick(album.id) })
+                                AlbumListItem(
+                                    album = album,
+                                    onToggleFavorite = { viewModel.toggleAlbumFavorite(album.id, album.isFavorite) },
+                                    onClick = { onAlbumClick(album.id) }
+                                )
                             }
                         }
                     }
@@ -210,6 +322,7 @@ fun AlbumListScreen(
 fun AlbumGridItem(
     album: AlbumEntity,
     isSelected: Boolean = false,
+    onToggleFavorite: (() -> Unit)? = null,
     onClick: () -> Unit
 ) {
     Card(
@@ -240,8 +353,8 @@ fun AlbumGridItem(
                 if (isSelected) {
                     Surface(
                         color = MaterialTheme.colorScheme.primary,
-                        shape = RoundedCornerShape(bottomStart = 8.dp),
-                        modifier = Modifier.align(Alignment.TopEnd)
+                        shape = RoundedCornerShape(bottomEnd = 8.dp),
+                        modifier = Modifier.align(Alignment.TopStart)
                     ) {
                         Icon(
                             imageVector = Icons.Default.Check,
@@ -251,6 +364,38 @@ fun AlbumGridItem(
                                 .size(24.dp)
                                 .padding(4.dp)
                         )
+                    }
+                }
+
+                // 模組 2：單張專輯快速收藏切換按鈕（無背景圓圈）
+                if (onToggleFavorite != null) {
+                    IconButton(
+                        onClick = onToggleFavorite,
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(4.dp)
+                            .size(36.dp)
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.size(24.dp)
+                        ) {
+                            // 陰影層：確保在淺色或白色封面上愛心邊框依然清晰可見
+                            Icon(
+                                imageVector = if (album.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                                contentDescription = null,
+                                tint = Color.Black.copy(alpha = 0.45f),
+                                modifier = Modifier
+                                    .size(22.dp)
+                                    .offset(x = 1.dp, y = 1.dp)
+                            )
+                            Icon(
+                                imageVector = if (album.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                                contentDescription = if (album.isFavorite) "取消最愛" else "加入最愛",
+                                tint = if (album.isFavorite) MaterialTheme.colorScheme.error else Color.White,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -277,6 +422,7 @@ fun AlbumGridItem(
 fun AlbumListItem(
     album: AlbumEntity,
     isSelected: Boolean = false,
+    onToggleFavorite: (() -> Unit)? = null,
     onClick: () -> Unit
 ) {
     Card(
@@ -321,6 +467,19 @@ fun AlbumListItem(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+
+            // 模組 2：單張專輯收藏切換
+            if (onToggleFavorite != null) {
+                IconButton(onClick = onToggleFavorite) {
+                    Icon(
+                        imageVector = if (album.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                        contentDescription = if (album.isFavorite) "取消最愛" else "加入最愛",
+                        tint = if (album.isFavorite) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+            }
+
             if (isSelected) {
                 Icon(
                     imageVector = Icons.Default.CheckCircle,

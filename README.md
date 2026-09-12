@@ -24,6 +24,29 @@ Many private cloud music solutions require dedicated server-side extensions (suc
 
 ---
 
+## 🚀 What's New in v0.8
+
+- ❤️ **Favorite Albums (我的最愛專輯收藏與過濾)**:
+  - **Single Album Quick Favorite Toggle**:
+    - Instantly mark or unmark any album as favorite with a single tap on the heart icon located on album grid cards (`AlbumGridItem`), album list rows (`AlbumListItem`), and the Album Detail TopAppBar (`AlbumDetailScreen`).
+    - **Clean Borderless Design**: Removed the dark semi-transparent circular background from album cards for a sleek, modern look, while adding a subtle drop shadow to maintain crisp contrast and visibility on both dark and light album covers.
+  - **TopAppBar Favorite Filter & Dedicated View**:
+    - Quick-toggle heart button in the TopAppBar (next to the sync button) on both Phone and Tablet layouts (`TabletThreePaneLayout`).
+    - Activating the filter switches the library grid to display exclusively favorited albums with a live count badge (`最愛專輯 (N)`).
+    - Includes a friendly empty-state illustration and quick "Show All Albums" action when no albums are favorited.
+  - 🔀 **Shuffle All Favorites (隨機播放最愛歌曲)**:
+    - Dedicated quick action bar banner above the favorite albums grid.
+    - Tapping "隨機播放最愛歌曲" queries all audio tracks across all favorite albums via high-performance Room query (`getTracksFromFavoriteAlbums()`), randomizes them (`tracks.shuffled()`), and immediately starts playback in AndroidX Media3 / ExoPlayer.
+    - Safety guard: Shows an informative Toast if no favorite tracks are available to play.
+  - 🛡️ **WebDAV Anti-Overwrite Protection**:
+    - Enhanced synchronization engine (`incrementalSync` & `fullRescan`) in `WebDavSyncRepository` to guarantee that local `isFavorite` status is strictly preserved and never reset or wiped during remote directory scans or metadata refreshes.
+  - 🗄️ **Room Database Migration (v4 → v5)**:
+    - Seamless `MIGRATION_4_5` adding `isFavorite INTEGER NOT NULL DEFAULT 0` to SQLite table `albums`, preserving all existing local album metadata and cache without data loss.
+  - ⚡ **Fast Scrollbar Touch Ergonomics**:
+    - Optimized `FastScrollbar` width (16.dp) and threshold (hiding when fewer than 8 albums exist), ensuring edge touch gestures on album cards never conflict with fast scrolling.
+
+---
+
 ## 🚀 What's New in v0.7.1
 
 - 📈 **Interactive 10-Band Graphic Equalizer Response Curve (`GraphicEqView`)**:

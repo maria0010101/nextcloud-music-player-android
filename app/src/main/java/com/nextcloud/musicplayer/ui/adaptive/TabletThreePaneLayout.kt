@@ -83,6 +83,7 @@ fun TabletThreePaneLayout(
     val isSyncing by albumListViewModel.isSyncing.collectAsState()
     val syncMessage by albumListViewModel.syncMessage.collectAsState()
     val searchQuery by albumListViewModel.searchQuery.collectAsState()
+    val isFavoriteFilterActive by albumListViewModel.isFavoriteFilterActive.collectAsState()
 
     val gridState = rememberLazyGridState()
     val listState = rememberLazyListState()
@@ -189,6 +190,15 @@ fun TabletThreePaneLayout(
                             }
                         }
 
+                        // 模組 2：我的最愛過濾按鈕
+                        IconButton(onClick = { albumListViewModel.toggleFavoriteFilter() }) {
+                            Icon(
+                                imageVector = if (isFavoriteFilterActive) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                                contentDescription = if (isFavoriteFilterActive) "顯示全部專輯" else "僅顯示我的最愛",
+                                tint = if (isFavoriteFilterActive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+
                         // 切換網格/列表模式
                         IconButton(onClick = { albumListViewModel.toggleGridMode() }) {
                             Icon(
@@ -208,7 +218,7 @@ fun TabletThreePaneLayout(
                 OutlinedTextField(
                     value = searchQuery,
                     onValueChange = { albumListViewModel.setSearchQuery(it) },
-                    placeholder = { Text("搜尋專輯或歌手...") },
+                    placeholder = { Text(if (isFavoriteFilterActive) "搜尋最愛專輯或歌手..." else "搜尋專輯或歌手...") },
                     leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                     trailingIcon = {
                         if (searchQuery.isNotEmpty()) {
@@ -223,22 +233,103 @@ fun TabletThreePaneLayout(
                         .padding(horizontal = 16.dp, vertical = 4.dp)
                 )
 
+                // 模組 3：我的最愛專屬隨機播放列 (Shuffle All Favorites)
+                if (isFavoriteFilterActive) {
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                        tonalElevation = 1.dp
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Favorite,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "最愛 (${albums.size})",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            }
+
+                            FilledTonalButton(
+                                onClick = {
+                                    albumListViewModel.playFavoriteTracksShuffled(
+                                        onNoTracks = {
+                                            Toast.makeText(context, "尚未收藏任何專輯或最愛專輯內無歌曲", Toast.LENGTH_SHORT).show()
+                                        }
+                                    )
+                                },
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                colors = ButtonDefaults.filledTonalButtonColors(
+                                    containerColor = MaterialTheme.colorScheme.primary,
+                                    contentColor = MaterialTheme.colorScheme.onPrimary
+                                )
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Shuffle,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("隨機播放最愛", style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+                    }
+                }
+
                 // 專輯內容網格 / 清單
                 Box(modifier = Modifier.fillMaxSize()) {
                     if (albums.isEmpty()) {
                         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Icon(
-                                    imageVector = Icons.Default.Album,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(48.dp),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                                )
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Text(
-                                    text = if (searchQuery.isNotEmpty()) "查無相關專輯" else "目前音樂庫為空",
-                                    style = MaterialTheme.typography.titleSmall
-                                )
+                            if (isFavoriteFilterActive) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(16.dp)) {
+                                    Icon(
+                                        imageVector = Icons.Default.FavoriteBorder,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(48.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        text = if (searchQuery.isNotEmpty()) "查無符合的最愛專輯" else "尚未收藏任何最愛專輯",
+                                        style = MaterialTheme.typography.titleSmall
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    OutlinedButton(onClick = { albumListViewModel.toggleFavoriteFilter() }) {
+                                        Icon(Icons.AutoMirrored.Filled.ViewList, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("顯示全部", style = MaterialTheme.typography.labelMedium)
+                                    }
+                                }
+                            } else {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Icon(
+                                        imageVector = Icons.Default.Album,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(48.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        text = if (searchQuery.isNotEmpty()) "查無相關專輯" else "目前音樂庫為空",
+                                        style = MaterialTheme.typography.titleSmall
+                                    )
+                                }
                             }
                         }
                     } else {
@@ -255,6 +346,7 @@ fun TabletThreePaneLayout(
                                     AlbumGridItem(
                                         album = album,
                                         isSelected = (album.id == selectedAlbumId),
+                                        onToggleFavorite = { albumListViewModel.toggleAlbumFavorite(album.id, album.isFavorite) },
                                         onClick = { selectedAlbumId = album.id }
                                     )
                                 }
@@ -270,6 +362,7 @@ fun TabletThreePaneLayout(
                                     AlbumListItem(
                                         album = album,
                                         isSelected = (album.id == selectedAlbumId),
+                                        onToggleFavorite = { albumListViewModel.toggleAlbumFavorite(album.id, album.isFavorite) },
                                         onClick = { selectedAlbumId = album.id }
                                     )
                                 }
@@ -395,6 +488,15 @@ fun TabletThreePaneLayout(
                                         text = "共 ${albumTracks.size} 首曲目",
                                         style = MaterialTheme.typography.bodyMedium,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+
+                                // 模組 2：最愛收藏切換按鈕
+                                IconButton(onClick = { detailViewModel?.toggleFavorite() }) {
+                                    Icon(
+                                        imageVector = if (currentAlbum.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                                        contentDescription = if (currentAlbum.isFavorite) "取消收藏" else "加入收藏",
+                                        tint = if (currentAlbum.isFavorite) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
                             }
