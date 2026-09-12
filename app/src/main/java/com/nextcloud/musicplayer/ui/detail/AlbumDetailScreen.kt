@@ -21,8 +21,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.nextcloud.musicplayer.data.local.entity.TrackEntity
+import com.nextcloud.musicplayer.ui.common.conditionalMarquee
 import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -35,6 +37,7 @@ fun AlbumDetailScreen(
     val album by viewModel.album.collectAsState()
     val tracks by viewModel.tracks.collectAsState()
     val downloadStatus by viewModel.downloadStatus.collectAsState()
+    val enableTrackTitleMarquee by viewModel.enableTrackTitleMarquee.collectAsState()
     var showCoverSearchSheet by remember { mutableStateOf(false) }
 
     val currentTrack by viewModel.playerController.currentTrack.collectAsState()
@@ -206,6 +209,7 @@ fun AlbumDetailScreen(
                     index = index + 1,
                     track = track,
                     isPlaying = isCurrentTrack && isPlaying,
+                    enableMarquee = enableTrackTitleMarquee,
                     onClick = { viewModel.playTrack(index) }
                 )
             }
@@ -227,6 +231,7 @@ fun TrackListItem(
     index: Int,
     track: TrackEntity,
     isPlaying: Boolean = false,
+    enableMarquee: Boolean = true,
     onClick: () -> Unit
 ) {
     Surface(
@@ -276,12 +281,16 @@ fun TrackListItem(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         text = track.title,
-                        style = MaterialTheme.typography.bodyLarge,
+                        fontSize = 14.sp,
+                        style = MaterialTheme.typography.bodyMedium,
                         fontWeight = if (isPlaying) FontWeight.Bold else null,
                         color = if (isPlaying) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false)
+                        softWrap = false,
+                        overflow = if (enableMarquee) TextOverflow.Clip else TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .weight(1f)
+                            .conditionalMarquee(enableMarquee)
                     )
 
                     if (track.isDownloaded) {

@@ -41,6 +41,12 @@ class SettingsViewModel(
     val volumeSteps: StateFlow<Int> = settingsDataStore.volumeSteps
         .stateIn(viewModelScope, SharingStarted.Lazily, AppSettingsDataStore.DEFAULT_VOLUME_STEPS)
 
+    val enableAlbumTitleMarquee: StateFlow<Boolean> = settingsDataStore.enableAlbumTitleMarquee
+        .stateIn(viewModelScope, SharingStarted.Lazily, AppSettingsDataStore.DEFAULT_ENABLE_ALBUM_TITLE_MARQUEE)
+
+    val enableTrackTitleMarquee: StateFlow<Boolean> = settingsDataStore.enableTrackTitleMarquee
+        .stateIn(viewModelScope, SharingStarted.Lazily, AppSettingsDataStore.DEFAULT_ENABLE_TRACK_TITLE_MARQUEE)
+
     // 模組 2：離線下載 SAF 目錄 URI
     val downloadStorageUri: StateFlow<String?> = (dataStoreManager?.downloadStorageUri ?: flowOf(null))
         .stateIn(viewModelScope, SharingStarted.Lazily, null)
@@ -170,6 +176,18 @@ class SettingsViewModel(
     fun updateVolumeSteps(newSteps: Int) {
         viewModelScope.launch {
             settingsDataStore.saveVolumeSteps(newSteps)
+        }
+    }
+
+    fun updateEnableAlbumTitleMarquee(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsDataStore.saveEnableAlbumTitleMarquee(enabled)
+        }
+    }
+
+    fun updateEnableTrackTitleMarquee(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsDataStore.saveEnableTrackTitleMarquee(enabled)
         }
     }
 

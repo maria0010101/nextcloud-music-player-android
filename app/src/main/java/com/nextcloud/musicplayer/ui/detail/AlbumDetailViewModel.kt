@@ -17,7 +17,9 @@ import com.nextcloud.musicplayer.playback.PlayerController
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import com.nextcloud.musicplayer.core.settings.AppSettingsDataStore
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -27,10 +29,14 @@ class AlbumDetailViewModel(
     val playerController: PlayerController,
     private val coverSearchRepository: CoverSearchRepository? = null,
     private val coverManager: CoverManager? = null,
-    context: Context? = null
+    context: Context? = null,
+    private val settingsDataStore: AppSettingsDataStore? = null
 ) : ViewModel() {
 
     private val TAG = "AlbumDetailViewModel"
+
+    val enableTrackTitleMarquee: StateFlow<Boolean> = (settingsDataStore?.enableTrackTitleMarquee ?: flowOf(AppSettingsDataStore.DEFAULT_ENABLE_TRACK_TITLE_MARQUEE))
+        .stateIn(viewModelScope, SharingStarted.Lazily, AppSettingsDataStore.DEFAULT_ENABLE_TRACK_TITLE_MARQUEE)
 
     private val _album = MutableStateFlow<AlbumEntity?>(null)
     val album: StateFlow<AlbumEntity?> = _album.asStateFlow()

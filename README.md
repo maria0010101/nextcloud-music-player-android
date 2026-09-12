@@ -24,6 +24,33 @@ Many private cloud music solutions require dedicated server-side extensions (suc
 
 ---
 
+## 🚀 What's New in v0.8.1
+
+- 🔤 **Album Title Font Refinement (標題字型縮小與視覺層級優化)**:
+  - **Refined Typography on Library Cards**:
+    - Reduced album title font size on both grid cards (`AlbumGridItem`) and list rows (`AlbumListItem`) from `16.sp` (`titleMedium`) to `14.sp` (`bodyMedium`).
+    - Establishes a balanced, elegant visual contrast against the `12.sp` track count subtitle, eliminating visual crowding while preserving high readability across all screen densities.
+- 📜 **Customizable Marquee Preferences (獨立跑馬燈設定開關)**:
+  - **New Interface & Marquee Settings Section**:
+    - Added a dedicated "Interface & Marquee Settings" (介面與跑馬燈設定) card within the Settings screen (`SettingsScreen`), allowing users to independently tailor text animation behaviors.
+  - **Granular Controls**:
+    - **Library Album Titles**: Controls horizontal marquee scrolling for album titles in library grids and lists (Default: **OFF** / static with ellipsis, ensuring distraction-free browsing across large libraries).
+    - **Album Detail Track Titles**: Controls horizontal marquee scrolling for long track names in album detail track lists (Default: **ON**, allowing long track titles to scroll smoothly without clipping).
+- 🔄 **Conditional Marquee & Clean Ellipsis Truncation (條件式跑馬燈與簡潔截斷)**:
+  - **Modular `Modifier.conditionalMarquee` Extension**:
+    - Seamless dynamic switching between continuous horizontal scrolling and stationary text with clean `TextOverflow.Ellipsis` (`...`).
+    - When marquee is active, applies smooth horizontal auto-scrolling with a generous initial delay (1200ms) and repeat delay (1200ms) for an optimal reading cadence.
+    - Fully unified across mobile and tablet multi-pane responsive layouts (`AdaptiveHomeScreen`, `TabletThreePaneLayout`, `AlbumDetailScreen`).
+- 🛠️ **Nextcloud WebDAV Path Sanitization & Prefix Fix (WebDAV 路徑清理與前綴異常修復)**:
+  - **Root Endpoint Prefix Stripping**:
+    - Fixed an issue where albums synced from Nextcloud WebDAV root directories were prefixed with raw endpoint artifacts such as `public.php - webdav - ` or `remote.php - dav - files - <user> - `.
+    - Implemented robust path normalization (`sanitizeWebDavPath`) in `WebDavSyncRepository` to strip URL encoding, system root endpoints (`public.php/webdav/`, `remote.php/dav/files/<user>/`, `remote.php/webdav/`), and redundant slashes prior to calculating folder depth hierarchies (levels 1–5).
+  - **Automated Database Self-Healing**:
+    - Added `MusicRepository.sanitizeExistingAlbumNames()` on app startup to automatically detect and repair existing dirty album records in Room database without requiring a full rescan.
+    - Added proactive pre-sync sanitization and in-memory cleanups in ViewModels (`AlbumListViewModel`, `AlbumDetailViewModel`) ensuring instantaneous UI correction.
+
+---
+
 ## 🚀 What's New in v0.8
 
 - ❤️ **Favorite Albums (我的最愛專輯收藏與過濾)**:

@@ -27,8 +27,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.nextcloud.musicplayer.data.local.entity.AlbumEntity
+import com.nextcloud.musicplayer.ui.common.conditionalMarquee
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
@@ -45,6 +47,7 @@ fun AlbumListScreen(
     val isSyncing by viewModel.isSyncing.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
     val isFavoriteFilterActive by viewModel.isFavoriteFilterActive.collectAsState()
+    val enableAlbumTitleMarquee by viewModel.enableAlbumTitleMarquee.collectAsState()
 
     val gridState = rememberLazyGridState()
     val listState = rememberLazyListState()
@@ -264,6 +267,7 @@ fun AlbumListScreen(
                             items(albums, key = { it.id }) { album ->
                                 AlbumGridItem(
                                     album = album,
+                                    enableMarquee = enableAlbumTitleMarquee,
                                     onToggleFavorite = { viewModel.toggleAlbumFavorite(album.id, album.isFavorite) },
                                     onClick = { onAlbumClick(album.id) }
                                 )
@@ -279,6 +283,7 @@ fun AlbumListScreen(
                             items(albums, key = { it.id }) { album ->
                                 AlbumListItem(
                                     album = album,
+                                    enableMarquee = enableAlbumTitleMarquee,
                                     onToggleFavorite = { viewModel.toggleAlbumFavorite(album.id, album.isFavorite) },
                                     onClick = { onAlbumClick(album.id) }
                                 )
@@ -322,6 +327,7 @@ fun AlbumListScreen(
 fun AlbumGridItem(
     album: AlbumEntity,
     isSelected: Boolean = false,
+    enableMarquee: Boolean = false,
     onToggleFavorite: (() -> Unit)? = null,
     onClick: () -> Unit
 ) {
@@ -402,10 +408,16 @@ fun AlbumGridItem(
             Column(modifier = Modifier.padding(10.dp)) {
                 Text(
                     text = album.name,
-                    style = MaterialTheme.typography.titleMedium,
+                    fontSize = 14.sp,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
                     color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    softWrap = false,
+                    overflow = if (enableMarquee) TextOverflow.Clip else TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .conditionalMarquee(enableMarquee)
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
@@ -422,6 +434,7 @@ fun AlbumGridItem(
 fun AlbumListItem(
     album: AlbumEntity,
     isSelected: Boolean = false,
+    enableMarquee: Boolean = false,
     onToggleFavorite: (() -> Unit)? = null,
     onClick: () -> Unit
 ) {
@@ -455,15 +468,21 @@ fun AlbumListItem(
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = album.name,
-                    style = MaterialTheme.typography.titleMedium,
+                    fontSize = 14.sp,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
                     color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    softWrap = false,
+                    overflow = if (enableMarquee) TextOverflow.Clip else TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .conditionalMarquee(enableMarquee)
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = "${album.trackCount} 首歌曲",
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }

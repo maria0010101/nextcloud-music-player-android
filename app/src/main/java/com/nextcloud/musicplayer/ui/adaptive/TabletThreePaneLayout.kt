@@ -56,6 +56,7 @@ import com.nextcloud.musicplayer.ui.detail.TrackListItem
 import com.nextcloud.musicplayer.ui.settings.SettingsScreen
 import com.nextcloud.musicplayer.ui.settings.SettingsViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import java.util.Locale
 
@@ -84,6 +85,7 @@ fun TabletThreePaneLayout(
     val syncMessage by albumListViewModel.syncMessage.collectAsState()
     val searchQuery by albumListViewModel.searchQuery.collectAsState()
     val isFavoriteFilterActive by albumListViewModel.isFavoriteFilterActive.collectAsState()
+    val enableAlbumTitleMarquee by albumListViewModel.enableAlbumTitleMarquee.collectAsState()
 
     val gridState = rememberLazyGridState()
     val listState = rememberLazyListState()
@@ -104,12 +106,10 @@ fun TabletThreePaneLayout(
     var showCoverSearchSheet by remember { mutableStateOf(false) }
     var showZoomedArtworkDialog by remember { mutableStateOf(false) }
 
-    // 預設自動選取：若尚未選取，優先選取目前正在播放的專輯，或清單第一張專輯
+    // 當專輯清單初次載入或更新時，若尚未選取任何專輯則自動選取第一張
     LaunchedEffect(albums) {
         if (selectedAlbumId == null && albums.isNotEmpty()) {
-            val playingAlbumId = currentTrack?.albumId
-            val target = albums.find { it.id == playingAlbumId } ?: albums.first()
-            selectedAlbumId = target.id
+            selectedAlbumId = albums.first().id
         }
     }
 
@@ -128,7 +128,8 @@ fun TabletThreePaneLayout(
                 playerController = playerController,
                 coverSearchRepository = coverSearchRepository,
                 coverManager = coverManager,
-                context = context
+                context = context,
+                settingsDataStore = settingsDataStore
             )
         }
     }
@@ -136,6 +137,7 @@ fun TabletThreePaneLayout(
     val selectedAlbum by (detailViewModel?.album ?: MutableStateFlow(null)).collectAsState()
     val albumTracks by (detailViewModel?.tracks ?: MutableStateFlow(emptyList())).collectAsState()
     val downloadStatus by (detailViewModel?.downloadStatus ?: MutableStateFlow(null)).collectAsState()
+    val enableTrackTitleMarquee by (detailViewModel?.enableTrackTitleMarquee ?: flowOf(AppSettingsDataStore.DEFAULT_ENABLE_TRACK_TITLE_MARQUEE)).collectAsState(AppSettingsDataStore.DEFAULT_ENABLE_TRACK_TITLE_MARQUEE)
 
     // 進度條 Seek 控制狀態
     var isSeeking by remember { mutableStateOf(false) }
@@ -346,6 +348,7 @@ fun TabletThreePaneLayout(
                                     AlbumGridItem(
                                         album = album,
                                         isSelected = (album.id == selectedAlbumId),
+                                        enableMarquee = enableAlbumTitleMarquee,
                                         onToggleFavorite = { albumListViewModel.toggleAlbumFavorite(album.id, album.isFavorite) },
                                         onClick = { selectedAlbumId = album.id }
                                     )
@@ -362,6 +365,7 @@ fun TabletThreePaneLayout(
                                     AlbumListItem(
                                         album = album,
                                         isSelected = (album.id == selectedAlbumId),
+                                        enableMarquee = enableAlbumTitleMarquee,
                                         onToggleFavorite = { albumListViewModel.toggleAlbumFavorite(album.id, album.isFavorite) },
                                         onClick = { selectedAlbumId = album.id }
                                     )
@@ -581,6 +585,7 @@ fun TabletThreePaneLayout(
                             index = index + 1,
                             track = track,
                             isPlaying = isThisTrackPlaying,
+                            enableMarquee = enableTrackTitleMarquee,
                             onClick = { detailViewModel?.playTrack(index) }
                         )
                     }

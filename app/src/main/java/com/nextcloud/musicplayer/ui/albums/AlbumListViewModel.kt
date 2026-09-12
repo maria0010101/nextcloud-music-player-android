@@ -17,7 +17,9 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import com.nextcloud.musicplayer.core.settings.AppSettingsDataStore
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -25,8 +27,12 @@ class AlbumListViewModel(
     val repository: MusicRepository,
     private val prefsManager: SecurePreferencesManager,
     private val context: Context? = null,
-    val playerController: PlayerController? = null
+    val playerController: PlayerController? = null,
+    private val settingsDataStore: AppSettingsDataStore? = null
 ) : ViewModel() {
+
+    val enableAlbumTitleMarquee: StateFlow<Boolean> = (settingsDataStore?.enableAlbumTitleMarquee ?: flowOf(AppSettingsDataStore.DEFAULT_ENABLE_ALBUM_TITLE_MARQUEE))
+        .stateIn(viewModelScope, SharingStarted.Lazily, AppSettingsDataStore.DEFAULT_ENABLE_ALBUM_TITLE_MARQUEE)
 
     val rawAlbums: StateFlow<List<AlbumEntity>> = repository.getAlbums()
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
@@ -68,6 +74,9 @@ class AlbumListViewModel(
     init {
         context?.let { ctx ->
             observeSyncProgress(ctx)
+        }
+        viewModelScope.launch {
+            repository.sanitizeExistingAlbumNames()
         }
     }
 

@@ -91,6 +91,22 @@ class WebDavSyncRepository(
                 .associateBy { normalizePath(it.remotePath) }
             val localAlbumPaths = localAlbumsMap.keys.toSet()
 
+            // 清洗現有資料庫中可能殘留的前綴髒資料 (public.php-webdav- 等)
+            val dirtyExistingAlbums = allLocalAlbums.filter { MusicRepository.isDirtyAlbumName(it.name) }
+            if (dirtyExistingAlbums.isNotEmpty()) {
+                val cleanedExisting = dirtyExistingAlbums.map { album ->
+                    val reformatted = MusicRepository.formatAlbumNameByLevels(album.remotePath, cleanFolder, effectiveLevels)
+                    val finalName = if (!MusicRepository.isDirtyAlbumName(reformatted)) {
+                        reformatted
+                    } else {
+                        MusicRepository.cleanDirtyAlbumName(album.name)
+                    }
+                    album.copy(name = finalName)
+                }
+                database.albumDao().insertAlbums(cleanedExisting)
+                Log.d(TAG, "增量同步前已清洗 ${cleanedExisting.size} 筆現存髒資料專輯名稱")
+            }
+
             val remoteAlbumPaths = mutableSetOf<String>()
             val unchangedAlbumIds = mutableSetOf<String>()
 
@@ -174,7 +190,8 @@ class WebDavSyncRepository(
                         val rootName = if (cleanFolder.isEmpty()) "根目錄" else cleanFolder.substringAfterLast('/')
                         val levels = listOf(rootName) + node.relativeSegments
                         val currentFolderName = if (node.relativeSegments.isNotEmpty()) node.relativeSegments.last() else rootName
-                        val albumDisplayName = MusicRepository.formatAlbumName(levels, effectiveLevels, currentFolderName)
+                        val rawDisplayName = MusicRepository.formatAlbumName(levels, effectiveLevels, currentFolderName)
+                        val albumDisplayName = MusicRepository.cleanDirtyAlbumName(rawDisplayName)
 
                         val sortedAudios = directAudios.sortedWith { a, b ->
                             val nameA = a.displayName.ifBlank { a.href.substringAfterLast('/') }

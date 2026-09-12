@@ -131,6 +131,33 @@ class MusicRepository(
         Log.d(TAG, "已依自訂階層重新格式化 ${updatedAlbums.size} 張專輯名稱")
     }
 
+    /**
+     * 清洗並更新本機資料庫內含有系統前綴之髒資料專輯名稱 (如 public.php-webdav- 前綴)
+     */
+    suspend fun sanitizeExistingAlbumNames() = withContext(Dispatchers.IO) {
+        val albums = database.albumDao().getAllAlbumsList()
+        if (albums.isEmpty()) return@withContext
+
+        val dirtyAlbums = albums.filter { isDirtyAlbumName(it.name) }
+        if (dirtyAlbums.isEmpty()) return@withContext
+
+        val selectedLevels = settingsDataStore?.albumNameLevels?.firstOrNull()
+            ?: AppSettingsDataStore.DEFAULT_ALBUM_NAME_LEVELS
+        val scanRootDir = settingsDataStore?.musicFolder?.firstOrNull() ?: ""
+
+        val cleanedAlbums = dirtyAlbums.map { album ->
+            val reformatted = formatAlbumNameByLevels(album.remotePath, scanRootDir, selectedLevels)
+            val finalName = if (!isDirtyAlbumName(reformatted)) {
+                reformatted
+            } else {
+                cleanDirtyAlbumName(album.name)
+            }
+            album.copy(name = finalName)
+        }
+        database.albumDao().insertAlbums(cleanedAlbums)
+        Log.d(TAG, "已自動清洗並更新 ${cleanedAlbums.size} 筆髒資料專輯名稱")
+    }
+
     private data class ScanFolderNode(
         val folderUrl: String,
         val relativeSegments: List<String>,
@@ -147,7 +174,65 @@ class MusicRepository(
         }
 
         /**
-         * 提取 URL 或路徑的純路徑部分 (解碼後並移除 protocol 與 host)
+         * 過濾並剝除 Nextcloud 系統保留的根路徑前綴 (public.php/webdav/, remote.php/dav/files/<user>/, remote.php/webdav/)
+         */
+        fun sanitizeWebDavPath(rawPath: String): String {
+            return rawPath
+                .removePrefix("/")
+                .replace(Regex("^(public\\.php/webdav(/|$)|remote\\.php/dav/files/[^/]+(/|$)|remote\\.php/webdav(/|$))", RegexOption.IGNORE_CASE), "")
+                .removePrefix("/")
+        }
+
+        /**
+         * 檢查專輯名稱是否帶有未清理的 WebDAV 系統前綴髒資料
+         */
+        fun isDirtyAlbumName(name: String): Boolean {
+            val lower = name.trim().lowercase()
+            return lower.startsWith("public.php") ||
+                   lower.startsWith("webdav-") ||
+                   lower.startsWith("webdav -") ||
+                   lower.startsWith("webdav/") ||
+                   lower.startsWith("remote.php")
+        }
+
+        /**
+         * 清除現有資料庫中可能殘留的系統路徑前綴 (例如 "public.php - webdav - " 或 "public.php-webdav-")
+         */
+        fun cleanDirtyAlbumName(name: String): String {
+            var cleaned = name.trim()
+            val prefixes = listOf(
+                "public.php - webdav - ",
+                "public.php-webdav-",
+                "public.php/webdav/",
+                "public.php - ",
+                "public.php-",
+                "webdav - ",
+                "webdav-",
+                "remote.php - webdav - ",
+                "remote.php-webdav-",
+                "remote.php/webdav/",
+                "remote.php - ",
+                "remote.php-"
+            )
+            var changed = true
+            while (changed) {
+                changed = false
+                for (prefix in prefixes) {
+                    if (cleaned.startsWith(prefix, ignoreCase = true)) {
+                        cleaned = cleaned.substring(prefix.length).trim()
+                        changed = true
+                    }
+                }
+            }
+            cleaned = cleaned.replace(
+                Regex("^(public\\.php|remote\\.php)(\\s*-\\s*|/|-)(dav(\\s*-\\s*|/|-)(files(\\s*-\\s*|/|-)[^/]+(\\s*-\\s*|/|-))?)?(webdav(\\s*-\\s*|/|-))?", RegexOption.IGNORE_CASE),
+                ""
+            ).trim()
+            return cleaned.ifBlank { name }
+        }
+
+        /**
+         * 提取 URL 或路徑的純路徑部分 (解碼後並移除 protocol 與 host，並過濾掉 WebDAV 系統端點保留前綴)
          */
         fun extractCleanPath(urlOrPath: String): String {
             val decoded = try {
@@ -155,7 +240,8 @@ class MusicRepository(
             } catch (e: Exception) {
                 urlOrPath
             }
-            return decoded.substringAfter("://").substringAfter('/', decoded).trimEnd('/')
+            val rawPath = decoded.substringAfter("://").substringAfter('/', decoded).trimEnd('/')
+            return sanitizeWebDavPath(rawPath)
         }
 
         /**
@@ -167,6 +253,10 @@ class MusicRepository(
 
             if (currentPath.equals(rootPath, ignoreCase = true)) {
                 return emptyList()
+            }
+
+            if (rootPath.isBlank()) {
+                return currentPath.split('/').filter { it.isNotBlank() }
             }
 
             if (currentPath.startsWith("$rootPath/", ignoreCase = true)) {
@@ -228,9 +318,9 @@ class MusicRepository(
                 cleanFullPath
             }
 
-            val relativeSegments = if (folderPath.equals(cleanScanRoot, ignoreCase = true)) {
+            val relativeSegments = if (cleanScanRoot.isNotBlank() && folderPath.equals(cleanScanRoot, ignoreCase = true)) {
                 emptyList()
-            } else if (folderPath.startsWith("$cleanScanRoot/", ignoreCase = true)) {
+            } else if (cleanScanRoot.isNotBlank() && folderPath.startsWith("$cleanScanRoot/", ignoreCase = true)) {
                 folderPath.substring(cleanScanRoot.length + 1).split('/').filter { it.isNotBlank() }
             } else {
                 folderPath.trim('/').split('/').filter { it.isNotBlank() }
@@ -243,7 +333,8 @@ class MusicRepository(
                 rootName
             }
 
-            return formatAlbumName(levels, selectedLevels, currentFolderName)
+            val formatted = formatAlbumName(levels, selectedLevels, currentFolderName)
+            return cleanDirtyAlbumName(formatted)
         }
 
         /**

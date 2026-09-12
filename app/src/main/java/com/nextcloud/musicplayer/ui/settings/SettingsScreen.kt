@@ -38,6 +38,8 @@ fun SettingsScreen(
     val isSyncing by viewModel.isSyncing.collectAsState()
     val syncMessage by viewModel.syncMessage.collectAsState()
     val volumeSteps by viewModel.volumeSteps.collectAsState()
+    val enableAlbumTitleMarquee by viewModel.enableAlbumTitleMarquee.collectAsState()
+    val enableTrackTitleMarquee by viewModel.enableTrackTitleMarquee.collectAsState()
 
     val openDocumentTreeLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
@@ -272,7 +274,84 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(28.dp))
 
-            // 3. 緩衝快取上限設定 (模組 4 & 5)
+            // 3. 介面與跑馬燈顯示設定
+            Text(
+                text = "介面與跑馬燈設定",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    // 1. 音樂庫專輯名稱跑馬燈
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { viewModel.updateEnableAlbumTitleMarquee(!enableAlbumTitleMarquee) }
+                            .padding(vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "音樂庫專輯名稱跑馬燈",
+                                style = MaterialTheme.typography.bodyLarge
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "當音樂庫清單中的專輯名稱過長時，以跑馬燈滾動顯示；關閉時以省略號截斷",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Switch(
+                            checked = enableAlbumTitleMarquee,
+                            onCheckedChange = { viewModel.updateEnableAlbumTitleMarquee(it) }
+                        )
+                    }
+
+                    HorizontalDivider(
+                        modifier = Modifier.padding(vertical = 8.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                    )
+
+                    // 2. 專輯曲目名稱跑馬燈
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { viewModel.updateEnableTrackTitleMarquee(!enableTrackTitleMarquee) }
+                            .padding(vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "專輯曲目名稱跑馬燈",
+                                style = MaterialTheme.typography.bodyLarge
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "當專輯內曲目列表的歌曲名稱過長時，以跑馬燈滾動顯示；關閉時以省略號截斷",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Switch(
+                            checked = enableTrackTitleMarquee,
+                            onCheckedChange = { viewModel.updateEnableTrackTitleMarquee(it) }
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(28.dp))
+
+            // 4. 緩衝快取上限設定 (模組 4 & 5)
             Text(
                 text = "音訊串流快取管理",
                 style = MaterialTheme.typography.titleMedium,
