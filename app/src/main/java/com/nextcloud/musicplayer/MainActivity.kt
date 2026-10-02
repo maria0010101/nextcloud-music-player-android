@@ -126,7 +126,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
-        // 啟動／切入前台：對齊系統音量
+        // 啟動／切入前台：恢復 App 內部音量，不讀寫系統音量
         playerViewModel.onAppForeground()
     }
 

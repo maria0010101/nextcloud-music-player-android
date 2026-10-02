@@ -15,6 +15,7 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
+import com.nextcloud.musicplayer.audio.PlaybackVolume
 import com.nextcloud.musicplayer.data.local.entity.TrackEntity
 import com.nextcloud.musicplayer.data.repository.MusicRepository
 import kotlinx.coroutines.CoroutineScope
@@ -67,6 +68,9 @@ class PlayerController(
     val playbackError: StateFlow<String?> = _playbackError.asStateFlow()
 
     private var currentPlaylist = listOf<TrackEntity>()
+    private val _currentPlaylistFlow = MutableStateFlow<List<TrackEntity>>(emptyList())
+    val currentPlaylistFlow: StateFlow<List<TrackEntity>> = _currentPlaylistFlow.asStateFlow()
+
     private var progressPollingJob: Job? = null
 
     fun connect(onConnected: ((MediaController) -> Unit)? = null) {
@@ -281,6 +285,35 @@ class PlayerController(
         executePlayTracks(controller, tracks, startIndex, coverUrl)
     }
 
+    private fun createMediaItem(track: TrackEntity, coverUrl: String? = null): MediaItem {
+        val playbackUrl = track.playableUri
+        val playUri = Uri.parse(playbackUrl)
+        val trackCover = track.coverUrl ?: coverUrl
+
+        val metaBuilder = MediaMetadata.Builder()
+            .setTitle(track.title)
+            .setArtist(track.format)
+            .setArtworkUri(trackCover?.let { Uri.parse(it) })
+
+        val trackBytes = ArtworkHelper.getCachedArtworkBytes(trackCover)
+        if (trackBytes != null) {
+            metaBuilder.setArtworkData(trackBytes, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
+        }
+
+        val metadata = metaBuilder.build()
+
+        return MediaItem.Builder()
+            .setMediaId(playbackUrl)
+            .setUri(playUri)
+            .setRequestMetadata(
+                MediaItem.RequestMetadata.Builder()
+                    .setMediaUri(playUri)
+                    .build()
+            )
+            .setMediaMetadata(metadata)
+            .build()
+    }
+
     private fun executePlayTracks(
         controller: MediaController,
         tracks: List<TrackEntity>,
@@ -288,6 +321,7 @@ class PlayerController(
         coverUrl: String?
     ) {
         currentPlaylist = tracks
+        _currentPlaylistFlow.value = tracks
         val effectiveCover = tracks.getOrNull(startIndex)?.coverUrl ?: coverUrl
 
         // 1. 同步檢查記憶體快取或本地圖檔 Byte 陣列，優先為起播項目帶入封面資料
@@ -352,6 +386,43 @@ class PlayerController(
                     }
                 }
             }
+        }
+    }
+
+    /**
+     * 加入歌曲至目前播放佇列後端 (Append to queue)
+     */
+    fun appendTracks(tracks: List<TrackEntity>, coverUrl: String? = null) {
+        if (tracks.isEmpty()) return
+        val controller = mediaController
+        if (controller == null || currentPlaylist.isEmpty() || controller.playbackState == Player.STATE_IDLE || controller.playbackState == Player.STATE_ENDED) {
+            playTracks(tracks, startIndex = 0, coverUrl = coverUrl)
+            return
+        }
+
+        val newMediaItems = tracks.map { createMediaItem(it, coverUrl) }
+        controller.addMediaItems(newMediaItems)
+        currentPlaylist = currentPlaylist + tracks
+        _currentPlaylistFlow.value = currentPlaylist
+        Log.d(TAG, "appendTracks: 成功追加 ${tracks.size} 首曲目，目前佇列共 ${currentPlaylist.size} 首")
+    }
+
+    /**
+     * 清除當前播放佇列並立即播放新曲目清單 (Clear queue & Play)
+     */
+    fun clearAndPlayTracks(tracks: List<TrackEntity>, startIndex: Int = 0, coverUrl: String? = null) {
+        playTracks(tracks, startIndex = startIndex, coverUrl = coverUrl)
+    }
+
+    /**
+     * 從播放佇列中移除指定索引曲目
+     */
+    fun removeTrackFromQueue(index: Int) {
+        val controller = mediaController ?: return
+        if (index in currentPlaylist.indices) {
+            controller.removeMediaItem(index)
+            currentPlaylist = currentPlaylist.toMutableList().apply { removeAt(index) }
+            _currentPlaylistFlow.value = currentPlaylist
         }
     }
 
@@ -460,7 +531,7 @@ class PlayerController(
         }
     }
 
-    private var currentVolume: Float = 1.0f
+    private var currentVolume: Float = PlaybackVolume.readGain(context)
     private var pendingVolume: Float? = null
 
     fun setVolume(volume: Float) {

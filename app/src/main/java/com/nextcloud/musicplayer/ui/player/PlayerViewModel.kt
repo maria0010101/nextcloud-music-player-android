@@ -57,7 +57,7 @@ class PlayerViewModel(
     }
 
     /**
-     * App 啟動／切入前台：對齊系統音量 (AudioManager -> Step)
+     * App 啟動／切入前台：恢復使用者設定的 App 內部音量
      */
     fun onAppForeground() {
         val steps = volumeSteps.value

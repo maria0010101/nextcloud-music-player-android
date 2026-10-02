@@ -22,13 +22,25 @@ import com.nextcloud.musicplayer.playback.PlaybackState
 import com.nextcloud.musicplayer.playback.PlayerController
 import java.util.Locale
 
+import android.widget.Toast
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
+import androidx.compose.ui.platform.LocalContext
+import com.nextcloud.musicplayer.data.repository.MusicRepository
+import com.nextcloud.musicplayer.ui.playlist.AddToPlaylistDialog
+import com.nextcloud.musicplayer.ui.playlist.SaveQueueDialog
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.launch
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PlayerScreen(
     playerController: PlayerController,
     onOpenSoundEffects: () -> Unit = {},
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    repository: MusicRepository? = null
 ) {
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     val currentTrack by playerController.currentTrack.collectAsState()
     val isPlaying by playerController.isPlaying.collectAsState()
     val playbackState by playerController.playbackState.collectAsState()
@@ -37,6 +49,11 @@ fun PlayerScreen(
     val durationMs by playerController.durationMs.collectAsState()
     val shuffleEnabled by playerController.shuffleModeEnabled.collectAsState()
     val repeatMode by playerController.repeatMode.collectAsState()
+    val currentQueue by playerController.currentPlaylistFlow.collectAsState()
+    val playlists by (repository?.getAllPlaylistsWithCount() ?: flowOf(emptyList())).collectAsState(initial = emptyList())
+
+    var showSaveQueueDialog by remember { mutableStateOf(false) }
+    var showAddToPlaylistDialog by remember { mutableStateOf(false) }
 
     var isSeeking by remember { mutableStateOf(false) }
     var seekSliderPosition by remember { mutableFloatStateOf(0f) }
@@ -63,6 +80,14 @@ fun PlayerScreen(
                     }
                 },
                 actions = {
+                    if (currentQueue.isNotEmpty() && repository != null) {
+                        IconButton(onClick = { showSaveQueueDialog = true }) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.QueueMusic,
+                                contentDescription = "儲存目前播放序列為清單"
+                            )
+                        }
+                    }
                     IconButton(onClick = onOpenSoundEffects) {
                         Icon(
                             Icons.Default.Tune,
@@ -193,6 +218,20 @@ fun PlayerScreen(
                                     )
                                 )
                             }
+
+                            if (repository != null) {
+                                SuggestionChip(
+                                    onClick = { showAddToPlaylistDialog = true },
+                                    label = { Text("加入自選清單") },
+                                    icon = {
+                                        Icon(
+                                            Icons.Default.PlaylistAdd,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                )
+                            }
                         }
                     }
                 }
@@ -309,6 +348,41 @@ fun PlayerScreen(
                 Text("尚未選取播放歌曲")
             }
         }
+    }
+
+    if (showSaveQueueDialog && repository != null) {
+        SaveQueueDialog(
+            queueSize = currentQueue.size,
+            onDismiss = { showSaveQueueDialog = false },
+            onSave = { name ->
+                coroutineScope.launch {
+                    val newId = repository.createPlaylist(name)
+                    repository.addTracksToPlaylist(newId, currentQueue)
+                    Toast.makeText(context, "已將 ${currentQueue.size} 首歌曲儲存為「$name」", Toast.LENGTH_SHORT).show()
+                }
+            }
+        )
+    }
+
+    if (showAddToPlaylistDialog && repository != null && currentTrack != null) {
+        AddToPlaylistDialog(
+            playlists = playlists,
+            targetTitle = "單曲《${currentTrack!!.title}》",
+            onDismiss = { showAddToPlaylistDialog = false },
+            onSelectPlaylist = { playlistId ->
+                coroutineScope.launch {
+                    repository.addTracksToPlaylist(playlistId, listOf(currentTrack!!))
+                    Toast.makeText(context, "已加入自選播放清單", Toast.LENGTH_SHORT).show()
+                }
+            },
+            onCreateNewPlaylist = { name ->
+                coroutineScope.launch {
+                    val newId = repository.createPlaylist(name)
+                    repository.addTracksToPlaylist(newId, listOf(currentTrack!!))
+                    Toast.makeText(context, "已建立「$name」並加入歌曲", Toast.LENGTH_SHORT).show()
+                }
+            }
+        )
     }
 }
 

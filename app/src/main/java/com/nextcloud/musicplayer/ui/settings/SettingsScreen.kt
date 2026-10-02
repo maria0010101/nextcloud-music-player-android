@@ -516,7 +516,7 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(28.dp))
 
-            // 6. 音量調節精度 (32steps 架構)
+            // 6. App 內部音量調節精度
             Text(
                 text = "音量調節精度",
                 style = MaterialTheme.typography.titleMedium,
@@ -530,11 +530,11 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text("自訂音量段數（採用 32steps 微步階 DSP 衰減演算法，切換平滑無爆音）", style = MaterialTheme.typography.labelMedium)
+                    Text("自訂 App 內部音量段數；切換前景與背景時保留設定，不改動系統音量。", style = MaterialTheme.typography.labelMedium)
                     Spacer(modifier = Modifier.height(8.dp))
 
                     val volumeOptions = listOf(
-                        15 to "預設（依循系統 15 段）",
+                        15 to "預設 15 段",
                         25 to "高精度 25 段",
                         30 to "進階 30 段",
                         50 to "超高精度 50 段",

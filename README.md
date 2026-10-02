@@ -24,6 +24,17 @@ Many private cloud music solutions require dedicated server-side extensions (suc
 
 ---
 
+## 🚀 What's New in v0.8.2
+
+- 📚 **Custom playlists and queue actions**: Create, rename and delete playlists; add albums or tracks to playlists; append albums to the play queue, replace the queue, and save the current queue as a playlist.
+- 🖼️ **Flexible album library layout**: Switch between list and 1–4 column grid views, with matching phone and tablet navigation.
+- 🎚️ **App-local volume control**: The selected 15–100 step level now adjusts ExoPlayer gain only. The app no longer writes Android's shared media volume or re-maps the selected level from the device volume on foreground/background transitions.
+- 💾 **Stable across restarts**: The selected internal level is saved and applied before the playback service starts audio, including after process recreation.
+- 🗄️ **Database compatibility**: Retains schema v6 used by recent development builds and migrates v5 data without destructive fallback.
+- ℹ️ **Device output remains under Android control**: Physical volume keys while the app is in the background, route changes, and audio-focus interruptions can still affect actual output loudness.
+
+---
+
 ## 🚀 What's New in v0.8.1
 
 - 🔤 **Album Title Font Refinement (標題字型縮小與視覺層級優化)**:

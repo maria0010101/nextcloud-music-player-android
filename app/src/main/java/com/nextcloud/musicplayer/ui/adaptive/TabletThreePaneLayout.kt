@@ -18,7 +18,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ViewList
+import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -43,19 +43,29 @@ import com.nextcloud.musicplayer.core.settings.DataStoreManager
 import com.nextcloud.musicplayer.data.repository.CoverManager
 import com.nextcloud.musicplayer.data.repository.CoverSearchRepository
 import com.nextcloud.musicplayer.data.repository.MusicRepository
+import com.nextcloud.musicplayer.data.local.entity.AlbumEntity
+import com.nextcloud.musicplayer.data.local.entity.TrackEntity
 import com.nextcloud.musicplayer.playback.PlaybackState
 import com.nextcloud.musicplayer.playback.PlayerController
+import com.nextcloud.musicplayer.ui.albums.AlbumActionBottomSheet
 import com.nextcloud.musicplayer.ui.albums.AlbumGridItem
 import com.nextcloud.musicplayer.ui.albums.AlbumListItem
 import com.nextcloud.musicplayer.ui.albums.AlbumListViewModel
-import kotlinx.coroutines.flow.collectLatest
+import com.nextcloud.musicplayer.ui.albums.AlbumViewMode
 import com.nextcloud.musicplayer.ui.albums.FastScrollbar
 import com.nextcloud.musicplayer.ui.detail.AlbumDetailViewModel
 import com.nextcloud.musicplayer.ui.detail.CoverSearchBottomSheet
 import com.nextcloud.musicplayer.ui.detail.TrackListItem
+import com.nextcloud.musicplayer.ui.playlist.AddToPlaylistDialog
+import com.nextcloud.musicplayer.ui.playlist.PlaylistDetailScreen
+import com.nextcloud.musicplayer.ui.playlist.PlaylistDetailViewModel
+import com.nextcloud.musicplayer.ui.playlist.PlaylistListScreen
+import com.nextcloud.musicplayer.ui.playlist.PlaylistListViewModel
+import com.nextcloud.musicplayer.ui.playlist.SaveQueueDialog
 import com.nextcloud.musicplayer.ui.settings.SettingsScreen
 import com.nextcloud.musicplayer.ui.settings.SettingsViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import java.util.Locale
@@ -80,18 +90,27 @@ fun TabletThreePaneLayout(
 
     // 1. 專輯列表狀態
     val albums by albumListViewModel.filteredAlbums.collectAsState()
-    val isGridMode by albumListViewModel.isGridMode.collectAsState()
+    val viewMode by albumListViewModel.viewMode.collectAsState()
+    val playlists by albumListViewModel.playlists.collectAsState()
     val isSyncing by albumListViewModel.isSyncing.collectAsState()
     val syncMessage by albumListViewModel.syncMessage.collectAsState()
     val searchQuery by albumListViewModel.searchQuery.collectAsState()
     val isFavoriteFilterActive by albumListViewModel.isFavoriteFilterActive.collectAsState()
     val enableAlbumTitleMarquee by albumListViewModel.enableAlbumTitleMarquee.collectAsState()
 
+    var isSearchActive by remember { mutableStateOf(false) }
+    var selectedAlbumForAction by remember { mutableStateOf<AlbumEntity?>(null) }
+    var albumForAddToPlaylist by remember { mutableStateOf<AlbumEntity?>(null) }
+    var trackForAddToPlaylist by remember { mutableStateOf<TrackEntity?>(null) }
+    var showPlaylistsDialog by remember { mutableStateOf(false) }
+    var showSaveQueueDialog by remember { mutableStateOf(false) }
+
     val gridState = rememberLazyGridState()
     val listState = rememberLazyListState()
 
     // 2. 播放控制器狀態 (跨欄共享)
     val currentTrack by playerController.currentTrack.collectAsState()
+    val currentQueue by playerController.currentPlaylistFlow.collectAsState()
     val isPlaying by playerController.isPlaying.collectAsState()
     val playbackState by playerController.playbackState.collectAsState()
     val positionMs by playerController.currentPositionMs.collectAsState()
@@ -166,74 +185,171 @@ fun TabletThreePaneLayout(
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
                 // 左欄頂部：標題與功能列
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = "Nextcloud 音樂庫",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold
-                    )
-
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        // 同步按鈕
-                        IconButton(
-                            onClick = { albumListViewModel.syncLibrary() },
-                            enabled = !isSyncing
-                        ) {
-                            if (isSyncing) {
-                                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                            } else {
-                                Icon(Icons.Default.Sync, contentDescription = "同步 WebDAV")
-                            }
+                if (isSearchActive) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(onClick = {
+                            isSearchActive = false
+                            albumListViewModel.setSearchQuery("")
+                        }) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "結束搜尋")
                         }
-
-                        // 模組 2：我的最愛過濾按鈕
-                        IconButton(onClick = { albumListViewModel.toggleFavoriteFilter() }) {
-                            Icon(
-                                imageVector = if (isFavoriteFilterActive) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                                contentDescription = if (isFavoriteFilterActive) "顯示全部專輯" else "僅顯示我的最愛",
-                                tint = if (isFavoriteFilterActive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-
-                        // 切換網格/列表模式
-                        IconButton(onClick = { albumListViewModel.toggleGridMode() }) {
-                            Icon(
-                                if (isGridMode) Icons.AutoMirrored.Filled.ViewList else Icons.Default.GridView,
-                                contentDescription = "切換檢視"
-                            )
-                        }
-
-                        // 設定按鈕
-                        IconButton(onClick = { showSettingsDialog = true }) {
-                            Icon(Icons.Default.Settings, contentDescription = "設定")
-                        }
-                    }
-                }
-
-                // 搜尋列
-                OutlinedTextField(
-                    value = searchQuery,
-                    onValueChange = { albumListViewModel.setSearchQuery(it) },
-                    placeholder = { Text(if (isFavoriteFilterActive) "搜尋最愛專輯或歌手..." else "搜尋專輯或歌手...") },
-                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                    trailingIcon = {
+                        TextField(
+                            value = searchQuery,
+                            onValueChange = { albumListViewModel.setSearchQuery(it) },
+                            placeholder = { Text(if (isFavoriteFilterActive) "搜尋最愛..." else "搜尋專輯或歌手...") },
+                            singleLine = true,
+                            colors = TextFieldDefaults.colors(
+                                focusedContainerColor = Color.Transparent,
+                                unfocusedContainerColor = Color.Transparent,
+                                disabledContainerColor = Color.Transparent,
+                                focusedIndicatorColor = Color.Transparent,
+                                unfocusedIndicatorColor = Color.Transparent
+                            ),
+                            modifier = Modifier.weight(1f)
+                        )
                         if (searchQuery.isNotEmpty()) {
                             IconButton(onClick = { albumListViewModel.setSearchQuery("") }) {
                                 Icon(Icons.Default.Clear, contentDescription = "清除")
                             }
                         }
-                    },
-                    singleLine = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 4.dp)
-                )
+                    }
+                } else {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "音樂庫",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 36.dp) {
+                                // 需求 1：搜尋按鈕
+                                IconButton(
+                                    onClick = { isSearchActive = true },
+                                    modifier = Modifier.size(36.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Search,
+                                        contentDescription = "搜尋專輯",
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+
+                                // 同步按鈕
+                                IconButton(
+                                    onClick = { albumListViewModel.syncLibrary() },
+                                    enabled = !isSyncing,
+                                    modifier = Modifier.size(36.dp)
+                                ) {
+                                    if (isSyncing) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(16.dp),
+                                            strokeWidth = 2.dp
+                                        )
+                                    } else {
+                                        Icon(
+                                            Icons.Default.Sync,
+                                            contentDescription = "同步 WebDAV",
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                }
+
+                                // 我的最愛過濾按鈕
+                                IconButton(
+                                    onClick = { albumListViewModel.toggleFavoriteFilter() },
+                                    modifier = Modifier.size(36.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = if (isFavoriteFilterActive) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                                        contentDescription = if (isFavoriteFilterActive) "顯示全部專輯" else "僅顯示我的最愛",
+                                        tint = if (isFavoriteFilterActive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+
+                                // 需求 2：自訂播放清單入口按鈕
+                                IconButton(
+                                    onClick = { showPlaylistsDialog = true },
+                                    modifier = Modifier.size(36.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.QueueMusic,
+                                        contentDescription = "自訂播放清單",
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+
+                                // 需求 5：切換網格排版 (列表、1、2、3、4 欄)
+                                Box {
+                                    var showViewModeMenu by remember { mutableStateOf(false) }
+                                    IconButton(
+                                        onClick = { showViewModeMenu = true },
+                                        modifier = Modifier.size(36.dp)
+                                    ) {
+                                        val currentIcon = when (viewMode) {
+                                            AlbumViewMode.LIST -> Icons.AutoMirrored.Filled.ViewList
+                                            AlbumViewMode.GRID_1 -> Icons.Default.ViewAgenda
+                                            AlbumViewMode.GRID_2 -> Icons.Default.GridView
+                                            AlbumViewMode.GRID_3 -> Icons.Default.Apps
+                                            AlbumViewMode.GRID_4 -> Icons.Default.ViewCompact
+                                        }
+                                        Icon(
+                                            currentIcon,
+                                            contentDescription = "切換檢視排版",
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                    DropdownMenu(
+                                        expanded = showViewModeMenu,
+                                        onDismissRequest = { showViewModeMenu = false }
+                                    ) {
+                                        AlbumViewMode.entries.forEach { mode ->
+                                            DropdownMenuItem(
+                                                text = { Text(mode.title) },
+                                                trailingIcon = {
+                                                    if (viewMode == mode) {
+                                                        Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                                    }
+                                                },
+                                                onClick = {
+                                                    showViewModeMenu = false
+                                                    albumListViewModel.setViewMode(mode)
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+
+                                // 設定按鈕
+                                IconButton(
+                                    onClick = { showSettingsDialog = true },
+                                    modifier = Modifier.size(36.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Settings,
+                                        contentDescription = "設定",
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
 
                 // 模組 3：我的最愛專屬隨機播放列 (Shuffle All Favorites)
                 if (isFavoriteFilterActive) {
@@ -335,22 +451,30 @@ fun TabletThreePaneLayout(
                             }
                         }
                     } else {
-                        if (isGridMode) {
+                        if (viewMode.isGrid) {
+                            val spacing = when (viewMode.columns) {
+                                1 -> 12.dp
+                                3 -> 8.dp
+                                4 -> 6.dp
+                                else -> 10.dp
+                            }
                             LazyVerticalGrid(
                                 state = gridState,
-                                columns = GridCells.Adaptive(minSize = 120.dp),
-                                contentPadding = PaddingValues(12.dp),
-                                verticalArrangement = Arrangement.spacedBy(10.dp),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                columns = GridCells.Fixed(viewMode.columns),
+                                contentPadding = PaddingValues(spacing),
+                                verticalArrangement = Arrangement.spacedBy(spacing),
+                                horizontalArrangement = Arrangement.spacedBy(spacing),
                                 modifier = Modifier.fillMaxSize()
                             ) {
                                 items(albums, key = { it.id }) { album ->
                                     AlbumGridItem(
                                         album = album,
+                                        columns = viewMode.columns,
                                         isSelected = (album.id == selectedAlbumId),
                                         enableMarquee = enableAlbumTitleMarquee,
                                         onToggleFavorite = { albumListViewModel.toggleAlbumFavorite(album.id, album.isFavorite) },
-                                        onClick = { selectedAlbumId = album.id }
+                                        onClick = { selectedAlbumId = album.id },
+                                        onLongClick = { selectedAlbumForAction = album }
                                     )
                                 }
                             }
@@ -367,7 +491,8 @@ fun TabletThreePaneLayout(
                                         isSelected = (album.id == selectedAlbumId),
                                         enableMarquee = enableAlbumTitleMarquee,
                                         onToggleFavorite = { albumListViewModel.toggleAlbumFavorite(album.id, album.isFavorite) },
-                                        onClick = { selectedAlbumId = album.id }
+                                        onClick = { selectedAlbumId = album.id },
+                                        onLongClick = { selectedAlbumForAction = album }
                                     )
                                 }
                             }
@@ -376,11 +501,11 @@ fun TabletThreePaneLayout(
                         // 快速滾動條 (FastScrollbar)
                         FastScrollbar(
                             totalItemCount = albums.size,
-                            firstVisibleIndex = if (isGridMode) gridState.firstVisibleItemIndex else listState.firstVisibleItemIndex,
-                            isScrollInProgress = if (isGridMode) gridState.isScrollInProgress else listState.isScrollInProgress,
+                            firstVisibleIndex = if (viewMode.isGrid) gridState.firstVisibleItemIndex else listState.firstVisibleItemIndex,
+                            isScrollInProgress = if (viewMode.isGrid) gridState.isScrollInProgress else listState.isScrollInProgress,
                             onScrollToItem = { targetIndex ->
                                 coroutineScope.launch {
-                                    if (isGridMode) {
+                                    if (viewMode.isGrid) {
                                         gridState.scrollToItem(targetIndex)
                                     } else {
                                         listState.scrollToItem(targetIndex)
@@ -495,6 +620,25 @@ fun TabletThreePaneLayout(
                                     )
                                 }
 
+                                // 加入播放序列按鈕
+                                IconButton(onClick = {
+                                    detailViewModel?.appendAlbumToQueue()
+                                    Toast.makeText(context, "已將整張專輯加入播放序列", Toast.LENGTH_SHORT).show()
+                                }) {
+                                    Icon(
+                                        imageVector = Icons.Default.PlaylistAdd,
+                                        contentDescription = "加入播放序列"
+                                    )
+                                }
+
+                                // 加入自選播放清單按鈕
+                                IconButton(onClick = { albumForAddToPlaylist = currentAlbum }) {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.QueueMusic,
+                                        contentDescription = "加入自選播放清單"
+                                    )
+                                }
+
                                 // 模組 2：最愛收藏切換按鈕
                                 IconButton(onClick = { detailViewModel?.toggleFavorite() }) {
                                     Icon(
@@ -586,7 +730,14 @@ fun TabletThreePaneLayout(
                             track = track,
                             isPlaying = isThisTrackPlaying,
                             enableMarquee = enableTrackTitleMarquee,
-                            onClick = { detailViewModel?.playTrack(index) }
+                            onClick = { detailViewModel?.playTrack(index) },
+                            onAppendToQueue = {
+                                detailViewModel?.appendTrackToQueue(track)
+                                Toast.makeText(context, "已加入播放序列", Toast.LENGTH_SHORT).show()
+                            },
+                            onAddToPlaylist = {
+                                trackForAddToPlaylist = track
+                            }
                         )
                     }
                 }
@@ -634,12 +785,24 @@ fun TabletThreePaneLayout(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontWeight = FontWeight.SemiBold
                         )
-                        IconButton(onClick = onOpenSoundEffects) {
-                            Icon(
-                                imageVector = Icons.Default.Tune,
-                                contentDescription = "音效與等化器",
-                                tint = MaterialTheme.colorScheme.primary
-                            )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(
+                                onClick = { showSaveQueueDialog = true },
+                                enabled = currentQueue.isNotEmpty()
+                            ) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.PlaylistAddCheck,
+                                    contentDescription = "儲存播放序列為播放清單",
+                                    tint = if (currentQueue.isNotEmpty()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                                )
+                            }
+                            IconButton(onClick = onOpenSoundEffects) {
+                                Icon(
+                                    imageVector = Icons.Default.Tune,
+                                    contentDescription = "音效與等化器",
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
                         }
                     }
 
@@ -741,6 +904,20 @@ fun TabletThreePaneLayout(
                                     colors = SuggestionChipDefaults.suggestionChipColors(
                                         containerColor = MaterialTheme.colorScheme.secondaryContainer
                                     )
+                                )
+                            }
+
+                            if (currentQueue.isNotEmpty()) {
+                                SuggestionChip(
+                                    onClick = { showSaveQueueDialog = true },
+                                    label = { Text("儲存序列", style = MaterialTheme.typography.labelSmall) },
+                                    icon = {
+                                        Icon(
+                                            Icons.AutoMirrored.Filled.PlaylistAddCheck,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
                                 )
                             }
                         }
@@ -943,6 +1120,142 @@ fun TabletThreePaneLayout(
                 )
             }
         }
+    }
+
+    // ==========================================
+    // 模態視窗：平板自訂播放列表 Dialog
+    // ==========================================
+    if (showPlaylistsDialog) {
+        Dialog(
+            onDismissRequest = { showPlaylistsDialog = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth(0.7f)
+                    .fillMaxHeight(0.85f),
+                shape = RoundedCornerShape(16.dp),
+                tonalElevation = 6.dp
+            ) {
+                var activePlaylistId by remember { mutableStateOf<Long?>(null) }
+                val playlistListViewModel = remember {
+                    PlaylistListViewModel(repository, playerController)
+                }
+
+                if (activePlaylistId == null) {
+                    PlaylistListScreen(
+                        viewModel = playlistListViewModel,
+                        onBack = { showPlaylistsDialog = false },
+                        onPlaylistClick = { id -> activePlaylistId = id }
+                    )
+                } else {
+                    val currentId = activePlaylistId!!
+                    val playlistDetailViewModel = remember(currentId) {
+                        PlaylistDetailViewModel(currentId, repository, playerController)
+                    }
+                    PlaylistDetailScreen(
+                        viewModel = playlistDetailViewModel,
+                        onBack = { activePlaylistId = null }
+                    )
+                }
+            }
+        }
+    }
+
+    // ==========================================
+    // 模態視窗：專輯長按動作表 (AlbumActionBottomSheet)
+    // ==========================================
+    selectedAlbumForAction?.let { album ->
+        AlbumActionBottomSheet(
+            album = album,
+            onDismiss = { selectedAlbumForAction = null },
+            onAppendToQueue = {
+                albumListViewModel.appendAlbumToQueue(album) { count ->
+                    Toast.makeText(context, "已將《${album.name}》（$count 首）加入播放序列", Toast.LENGTH_SHORT).show()
+                }
+            },
+            onClearAndPlay = {
+                albumListViewModel.playAlbumNow(album) { count ->
+                    Toast.makeText(context, "已清除序列並開始播放《${album.name}》（$count 首）", Toast.LENGTH_SHORT).show()
+                }
+            },
+            onAddToPlaylist = {
+                albumForAddToPlaylist = album
+            },
+            onToggleFavorite = {
+                albumListViewModel.toggleAlbumFavorite(album.id, album.isFavorite)
+                val msg = if (!album.isFavorite) "已加入最愛專輯" else "已取消最愛收藏"
+                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+            },
+            onViewAlbumDetail = {
+                selectedAlbumId = album.id
+            }
+        )
+    }
+
+    // ==========================================
+    // 模態視窗：加入自選播放清單 (專輯)
+    // ==========================================
+    albumForAddToPlaylist?.let { album ->
+        AddToPlaylistDialog(
+            playlists = playlists,
+            targetTitle = "專輯《${album.name}》",
+            onDismiss = { albumForAddToPlaylist = null },
+            onSelectPlaylist = { playlistId ->
+                albumListViewModel.addAlbumToPlaylist(album.id, playlistId) { count ->
+                    Toast.makeText(context, "已將 $count 首歌曲加入播放清單", Toast.LENGTH_SHORT).show()
+                }
+                albumForAddToPlaylist = null
+            },
+            onCreateNewPlaylist = { name ->
+                albumListViewModel.createPlaylistWithAlbum(name, album.id) { count ->
+                    Toast.makeText(context, "已建立「$name」並加入 $count 首歌曲", Toast.LENGTH_SHORT).show()
+                }
+                albumForAddToPlaylist = null
+            }
+        )
+    }
+
+    // ==========================================
+    // 模態視窗：加入自選播放清單 (單曲)
+    // ==========================================
+    trackForAddToPlaylist?.let { track ->
+        AddToPlaylistDialog(
+            playlists = playlists,
+            targetTitle = "單曲《${track.title}》",
+            onDismiss = { trackForAddToPlaylist = null },
+            onSelectPlaylist = { playlistId ->
+                coroutineScope.launch {
+                    repository.addTracksToPlaylist(playlistId, listOf(track))
+                    Toast.makeText(context, "已將歌曲加入播放清單", Toast.LENGTH_SHORT).show()
+                }
+                trackForAddToPlaylist = null
+            },
+            onCreateNewPlaylist = { name ->
+                coroutineScope.launch {
+                    val id = repository.createPlaylist(name)
+                    repository.addTracksToPlaylist(id, listOf(track))
+                    Toast.makeText(context, "已建立「$name」並加入歌曲", Toast.LENGTH_SHORT).show()
+                }
+                trackForAddToPlaylist = null
+            }
+        )
+    }
+
+    // ==========================================
+    // 模態視窗：儲存現正播放序列為播放清單
+    // ==========================================
+    if (showSaveQueueDialog) {
+        SaveQueueDialog(
+            queueSize = currentQueue.size,
+            onDismiss = { showSaveQueueDialog = false },
+            onSave = { name ->
+                albumListViewModel.saveCurrentQueueAsPlaylist(name) { count ->
+                    Toast.makeText(context, "已儲存播放清單「$name」（共 $count 首）", Toast.LENGTH_SHORT).show()
+                }
+                showSaveQueueDialog = false
+            }
+        )
     }
 }
 

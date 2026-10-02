@@ -27,6 +27,10 @@ import com.nextcloud.musicplayer.data.local.entity.TrackEntity
 import com.nextcloud.musicplayer.ui.common.conditionalMarquee
 import java.util.Locale
 
+import android.widget.Toast
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
+import com.nextcloud.musicplayer.ui.playlist.AddToPlaylistDialog
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AlbumDetailScreen(
@@ -38,7 +42,11 @@ fun AlbumDetailScreen(
     val tracks by viewModel.tracks.collectAsState()
     val downloadStatus by viewModel.downloadStatus.collectAsState()
     val enableTrackTitleMarquee by viewModel.enableTrackTitleMarquee.collectAsState()
+    val playlists by viewModel.playlists.collectAsState()
+
     var showCoverSearchSheet by remember { mutableStateOf(false) }
+    var showAddAlbumToPlaylistDialog by remember { mutableStateOf(false) }
+    var trackForAddToPlaylist by remember { mutableStateOf<TrackEntity?>(null) }
 
     val currentTrack by viewModel.playerController.currentTrack.collectAsState()
     val isPlaying by viewModel.playerController.isPlaying.collectAsState()
@@ -96,6 +104,17 @@ fun AlbumDetailScreen(
                                 contentDescription = "下載整張專輯"
                             )
                         }
+                    }
+
+                    IconButton(onClick = {
+                        viewModel.appendAlbumToQueue()
+                        Toast.makeText(context, "已將整張專輯加入播放序列", Toast.LENGTH_SHORT).show()
+                    }) {
+                        Icon(Icons.Default.PlaylistAdd, contentDescription = "加入播放序列")
+                    }
+
+                    IconButton(onClick = { showAddAlbumToPlaylistDialog = true }) {
+                        Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = "加入自選播放清單")
                     }
 
                     IconButton(onClick = { viewModel.toggleFavorite() }) {
@@ -210,7 +229,14 @@ fun AlbumDetailScreen(
                     track = track,
                     isPlaying = isCurrentTrack && isPlaying,
                     enableMarquee = enableTrackTitleMarquee,
-                    onClick = { viewModel.playTrack(index) }
+                    onClick = { viewModel.playTrack(index) },
+                    onAppendToQueue = {
+                        viewModel.appendTrackToQueue(track)
+                        Toast.makeText(context, "已加入播放序列", Toast.LENGTH_SHORT).show()
+                    },
+                    onAddToPlaylist = {
+                        trackForAddToPlaylist = track
+                    }
                 )
             }
         }
@@ -224,6 +250,44 @@ fun AlbumDetailScreen(
             viewModel = viewModel
         )
     }
+
+    // 加入整張專輯至自選清單 Dialog
+    if (showAddAlbumToPlaylistDialog && album != null) {
+        AddToPlaylistDialog(
+            playlists = playlists,
+            targetTitle = "專輯《${album!!.name}》",
+            onDismiss = { showAddAlbumToPlaylistDialog = false },
+            onSelectPlaylist = { playlistId ->
+                viewModel.addAlbumToPlaylist(playlistId) { count ->
+                    Toast.makeText(context, "已將 $count 首歌曲加入播放清單", Toast.LENGTH_SHORT).show()
+                }
+            },
+            onCreateNewPlaylist = { name ->
+                viewModel.createPlaylistAndAddAlbum(name) { count ->
+                    Toast.makeText(context, "已建立「$name」並加入 $count 首歌曲", Toast.LENGTH_SHORT).show()
+                }
+            }
+        )
+    }
+
+    // 加入單曲至自選清單 Dialog
+    trackForAddToPlaylist?.let { targetTrack ->
+        AddToPlaylistDialog(
+            playlists = playlists,
+            targetTitle = "單曲《${targetTrack.title}》",
+            onDismiss = { trackForAddToPlaylist = null },
+            onSelectPlaylist = { playlistId ->
+                viewModel.addTrackToPlaylist(targetTrack, playlistId) {
+                    Toast.makeText(context, "已將歌曲加入播放清單", Toast.LENGTH_SHORT).show()
+                }
+            },
+            onCreateNewPlaylist = { name ->
+                viewModel.createPlaylistAndAddTrack(name, targetTrack) {
+                    Toast.makeText(context, "已建立「$name」並加入歌曲", Toast.LENGTH_SHORT).show()
+                }
+            }
+        )
+    }
 }
 
 @Composable
@@ -232,7 +296,9 @@ fun TrackListItem(
     track: TrackEntity,
     isPlaying: Boolean = false,
     enableMarquee: Boolean = true,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onAppendToQueue: (() -> Unit)? = null,
+    onAddToPlaylist: (() -> Unit)? = null
 ) {
     Surface(
         modifier = Modifier
@@ -342,6 +408,44 @@ fun TrackListItem(
                     contentDescription = if (isPlaying) "現正播放" else "播放",
                     tint = MaterialTheme.colorScheme.primary
                 )
+            }
+
+            if (onAppendToQueue != null || onAddToPlaylist != null) {
+                var menuExpanded by remember { mutableStateOf(false) }
+                Box {
+                    IconButton(onClick = { menuExpanded = true }) {
+                        Icon(
+                            imageVector = Icons.Default.MoreVert,
+                            contentDescription = "更多選項",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = menuExpanded,
+                        onDismissRequest = { menuExpanded = false }
+                    ) {
+                        onAppendToQueue?.let { appendAction ->
+                            DropdownMenuItem(
+                                text = { Text("加入播放序列") },
+                                leadingIcon = { Icon(Icons.Default.PlaylistAdd, contentDescription = null) },
+                                onClick = {
+                                    menuExpanded = false
+                                    appendAction()
+                                }
+                            )
+                        }
+                        onAddToPlaylist?.let { addAction ->
+                            DropdownMenuItem(
+                                text = { Text("加入自選清單") },
+                                leadingIcon = { Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = null) },
+                                onClick = {
+                                    menuExpanded = false
+                                    addAction()
+                                }
+                            )
+                        }
+                    }
+                }
             }
         }
     }

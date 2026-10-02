@@ -30,8 +30,11 @@ import com.nextcloud.musicplayer.ui.settings.SettingsScreen
 import com.nextcloud.musicplayer.ui.settings.SettingsViewModel
 import java.net.URLDecoder
 import java.net.URLEncoder
-
 import com.nextcloud.musicplayer.ui.player.PlayerViewModel
+import com.nextcloud.musicplayer.ui.playlist.PlaylistDetailScreen
+import com.nextcloud.musicplayer.ui.playlist.PlaylistDetailViewModel
+import com.nextcloud.musicplayer.ui.playlist.PlaylistListScreen
+import com.nextcloud.musicplayer.ui.playlist.PlaylistListViewModel
 
 /**
  * 頂層自適應切換容器 (AdaptiveHomeScreen)
@@ -134,7 +137,7 @@ private fun PhoneModeLayout(
         Scaffold(
             snackbarHost = { SnackbarHost(snackbarHostState) },
             bottomBar = {
-                if (currentRoute.startsWith("albums") || currentRoute.startsWith("album_detail")) {
+                if (currentRoute.startsWith("albums") || currentRoute.startsWith("album_detail") || currentRoute.startsWith("playlists") || currentRoute.startsWith("playlist_detail")) {
                     MiniPlayerBar(
                         playerController = playerController,
                         onClick = { isPlayerSheetVisible = true }
@@ -159,11 +162,47 @@ private fun PhoneModeLayout(
                         },
                         onOpenSettings = {
                             navController.navigate("settings")
+                        },
+                        onOpenPlaylists = {
+                            navController.navigate("playlists")
                         }
                     )
                 }
 
-                // 2. 專輯曲目詳情
+                // 2. 自訂播放清單列表
+                composable("playlists") {
+                    val playlistListViewModel = remember {
+                        PlaylistListViewModel(repository, playerController)
+                    }
+                    PlaylistListScreen(
+                        viewModel = playlistListViewModel,
+                        onBack = { navController.popBackStack() },
+                        onPlaylistClick = { playlistId ->
+                            navController.navigate("playlist_detail/$playlistId")
+                        }
+                    )
+                }
+
+                // 3. 自訂播放清單歌曲明細
+                composable(
+                    route = "playlist_detail/{playlistId}",
+                    arguments = listOf(navArgument("playlistId") { type = NavType.LongType })
+                ) { backStackEntry ->
+                    val playlistId = backStackEntry.arguments?.getLong("playlistId") ?: 0L
+                    val playlistDetailViewModel = remember(playlistId) {
+                        PlaylistDetailViewModel(
+                            playlistId = playlistId,
+                            repository = repository,
+                            playerController = playerController
+                        )
+                    }
+                    PlaylistDetailScreen(
+                        viewModel = playlistDetailViewModel,
+                        onBack = { navController.popBackStack() }
+                    )
+                }
+
+                // 4. 專輯曲目詳情
                 composable(
                     route = "album_detail/{albumId}",
                     arguments = listOf(navArgument("albumId") { type = NavType.StringType })
@@ -187,7 +226,7 @@ private fun PhoneModeLayout(
                     )
                 }
 
-                // 3. 設定畫面
+                // 5. 設定畫面
                 composable("settings") {
                     val settingsViewModel = remember {
                         SettingsViewModel(
@@ -218,7 +257,8 @@ private fun PhoneModeLayout(
                 PlayerScreen(
                     playerController = playerController,
                     onOpenSoundEffects = { playerViewModel?.openSoundEffects() },
-                    onDismiss = { isPlayerSheetVisible = false }
+                    onDismiss = { isPlayerSheetVisible = false },
+                    repository = repository
                 )
             }
         }

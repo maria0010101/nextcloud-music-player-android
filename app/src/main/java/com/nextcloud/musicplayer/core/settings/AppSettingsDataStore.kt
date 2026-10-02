@@ -24,12 +24,14 @@ class AppSettingsDataStore(private val context: Context) {
         val KEY_VOLUME_STEPS = intPreferencesKey("volume_steps_key")
         val PREF_ENABLE_ALBUM_TITLE_MARQUEE = booleanPreferencesKey("pref_enable_album_title_marquee")
         val PREF_ENABLE_TRACK_TITLE_MARQUEE = booleanPreferencesKey("pref_enable_track_title_marquee")
+        val PREF_ALBUM_VIEW_MODE = intPreferencesKey("pref_album_view_mode")
 
         const val DEFAULT_CACHE_BYTES = 1024L * 1024L * 1024L // 1GB default
         val DEFAULT_ALBUM_NAME_LEVELS = setOf(2, 3) // 預設勾選階層 2、階層 3
         const val DEFAULT_VOLUME_STEPS = 15
         const val DEFAULT_ENABLE_ALBUM_TITLE_MARQUEE = false
         const val DEFAULT_ENABLE_TRACK_TITLE_MARQUEE = true
+        const val DEFAULT_ALBUM_VIEW_MODE = 2 // 預設 2 欄網格
     }
 
     val cacheMaxSizeBytes: Flow<Long> = context.dataStore.data.map { preferences ->
@@ -59,6 +61,10 @@ class AppSettingsDataStore(private val context: Context) {
 
     val enableTrackTitleMarquee: Flow<Boolean> = context.dataStore.data.map { preferences ->
         preferences[PREF_ENABLE_TRACK_TITLE_MARQUEE] ?: DEFAULT_ENABLE_TRACK_TITLE_MARQUEE
+    }
+
+    val albumViewModeId: Flow<Int> = context.dataStore.data.map { preferences ->
+        preferences[PREF_ALBUM_VIEW_MODE] ?: DEFAULT_ALBUM_VIEW_MODE
     }
 
     suspend fun saveCacheMaxBytes(bytes: Long) {
@@ -94,6 +100,12 @@ class AppSettingsDataStore(private val context: Context) {
     suspend fun saveEnableTrackTitleMarquee(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[PREF_ENABLE_TRACK_TITLE_MARQUEE] = enabled
+        }
+    }
+
+    suspend fun saveAlbumViewModeId(modeId: Int) {
+        context.dataStore.edit { preferences ->
+            preferences[PREF_ALBUM_VIEW_MODE] = modeId
         }
     }
 }

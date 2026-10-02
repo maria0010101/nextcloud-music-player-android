@@ -20,6 +20,7 @@ import com.google.common.util.concurrent.ListenableFuture
 import com.nextcloud.musicplayer.MainActivity
 import com.nextcloud.musicplayer.NextcloudMusicApp
 import com.nextcloud.musicplayer.audio.AudioEffectManager
+import com.nextcloud.musicplayer.audio.PlaybackVolume
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -53,6 +54,9 @@ class MusicPlaybackService : MediaSessionService() {
             .setHandleAudioBecomingNoisy(true)        // 拔耳機自動暫停
             .setWakeMode(C.WAKE_MODE_NETWORK)         // 串流播放時維持 CPU 喚醒
             .build()
+
+        // Apply saved app gain before the service can begin playback, including process restarts.
+        player.volume = PlaybackVolume.readGain(this)
 
         if (player.audioSessionId > 0) {
             AudioEffectManager.getInstance(applicationContext).attachSession(player.audioSessionId)

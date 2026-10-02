@@ -8,7 +8,10 @@ import com.nextcloud.musicplayer.core.network.WebDavItem
 import com.nextcloud.musicplayer.core.security.SecurePreferencesManager
 import com.nextcloud.musicplayer.core.settings.AppSettingsDataStore
 import com.nextcloud.musicplayer.data.local.AppDatabase
+import com.nextcloud.musicplayer.data.local.dao.PlaylistWithTrackCount
 import com.nextcloud.musicplayer.data.local.entity.AlbumEntity
+import com.nextcloud.musicplayer.data.local.entity.PlaylistEntity
+import com.nextcloud.musicplayer.data.local.entity.PlaylistTrackEntity
 import com.nextcloud.musicplayer.data.local.entity.TrackEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -72,6 +75,67 @@ class MusicRepository(
 
     fun getTracksForAlbum(albumId: String): Flow<List<TrackEntity>> =
         database.trackDao().getTracksForAlbum(albumId)
+
+    suspend fun getTracksForAlbumDirect(albumId: String): List<TrackEntity> = withContext(Dispatchers.IO) {
+        database.trackDao().getTracksForAlbumSync(albumId)
+    }
+
+    // ==========================================
+    // 播放列表 (Playlists) 管理
+    // ==========================================
+
+    fun getAllPlaylistsWithCount(): Flow<List<PlaylistWithTrackCount>> =
+        database.playlistDao().getAllPlaylistsWithCount()
+
+    fun getPlaylistById(id: Long): Flow<PlaylistEntity?> =
+        database.playlistDao().getPlaylistById(id)
+
+    suspend fun getPlaylistByIdDirect(id: Long): PlaylistEntity? = withContext(Dispatchers.IO) {
+        database.playlistDao().getPlaylistByIdDirect(id)
+    }
+
+    suspend fun createPlaylist(name: String): Long = withContext(Dispatchers.IO) {
+        database.playlistDao().insertPlaylist(PlaylistEntity(name = name.trim()))
+    }
+
+    suspend fun renamePlaylist(id: Long, newName: String) = withContext(Dispatchers.IO) {
+        val existing = database.playlistDao().getPlaylistByIdDirect(id) ?: return@withContext
+        database.playlistDao().updatePlaylist(
+            existing.copy(name = newName.trim(), updatedAt = System.currentTimeMillis())
+        )
+    }
+
+    suspend fun deletePlaylist(id: Long) = withContext(Dispatchers.IO) {
+        database.playlistDao().deleteTracksForPlaylist(id)
+        database.playlistDao().deletePlaylistById(id)
+    }
+
+    fun getTracksForPlaylist(playlistId: Long): Flow<List<TrackEntity>> =
+        database.playlistDao().getTracksForPlaylist(playlistId)
+
+    suspend fun getTracksForPlaylistDirect(playlistId: Long): List<TrackEntity> = withContext(Dispatchers.IO) {
+        database.playlistDao().getTracksForPlaylistDirect(playlistId)
+    }
+
+    suspend fun addTracksToPlaylist(playlistId: Long, tracks: List<TrackEntity>) = withContext(Dispatchers.IO) {
+        val currentMax = database.playlistDao().getMaxOrderIndex(playlistId) ?: -1
+        val playlistTracks = tracks.mapIndexed { idx, track ->
+            PlaylistTrackEntity(
+                playlistId = playlistId,
+                trackId = track.id,
+                orderIndex = currentMax + 1 + idx
+            )
+        }
+        database.playlistDao().insertPlaylistTracks(playlistTracks)
+        val p = database.playlistDao().getPlaylistByIdDirect(playlistId)
+        if (p != null) {
+            database.playlistDao().updatePlaylist(p.copy(updatedAt = System.currentTimeMillis()))
+        }
+    }
+
+    suspend fun removeTrackFromPlaylist(playlistId: Long, trackId: String) = withContext(Dispatchers.IO) {
+        database.playlistDao().removeTrackFromPlaylist(playlistId, trackId)
+    }
 
     suspend fun getAlbumById(albumId: String): AlbumEntity? =
         database.albumDao().getAlbumById(albumId)

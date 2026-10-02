@@ -20,8 +20,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import com.nextcloud.musicplayer.core.settings.AppSettingsDataStore
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import com.nextcloud.musicplayer.data.local.dao.PlaylistWithTrackCount
 
 class AlbumListViewModel(
     val repository: MusicRepository,
@@ -34,7 +36,17 @@ class AlbumListViewModel(
     val enableAlbumTitleMarquee: StateFlow<Boolean> = (settingsDataStore?.enableAlbumTitleMarquee ?: flowOf(AppSettingsDataStore.DEFAULT_ENABLE_ALBUM_TITLE_MARQUEE))
         .stateIn(viewModelScope, SharingStarted.Lazily, AppSettingsDataStore.DEFAULT_ENABLE_ALBUM_TITLE_MARQUEE)
 
+    val viewMode: StateFlow<AlbumViewMode> = (settingsDataStore?.albumViewModeId?.map { AlbumViewMode.fromId(it) }
+        ?: flowOf(AlbumViewMode.GRID_2))
+        .stateIn(viewModelScope, SharingStarted.Lazily, AlbumViewMode.GRID_2)
+
+    val isGridMode: StateFlow<Boolean> = viewMode.map { it.isGrid }
+        .stateIn(viewModelScope, SharingStarted.Lazily, true)
+
     val rawAlbums: StateFlow<List<AlbumEntity>> = repository.getAlbums()
+        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+
+    val playlists: StateFlow<List<PlaylistWithTrackCount>> = repository.getAllPlaylistsWithCount()
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     private val _isFavoriteFilterActive = MutableStateFlow(false)
@@ -42,9 +54,6 @@ class AlbumListViewModel(
 
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
-
-    private val _isGridMode = MutableStateFlow(true)
-    val isGridMode: StateFlow<Boolean> = _isGridMode.asStateFlow()
 
     private val _isSyncing = MutableStateFlow(false)
     val isSyncing: StateFlow<Boolean> = _isSyncing.asStateFlow()
@@ -131,8 +140,70 @@ class AlbumListViewModel(
         _searchQuery.value = query
     }
 
+    fun setViewMode(mode: AlbumViewMode) {
+        viewModelScope.launch {
+            settingsDataStore?.saveAlbumViewModeId(mode.id)
+        }
+    }
+
     fun toggleGridMode() {
-        _isGridMode.value = !_isGridMode.value
+        val current = viewMode.value
+        val next = if (current.isGrid) AlbumViewMode.LIST else AlbumViewMode.GRID_2
+        setViewMode(next)
+    }
+
+    fun appendAlbumToQueue(album: AlbumEntity, onCompleted: ((trackCount: Int) -> Unit)? = null) {
+        viewModelScope.launch {
+            val tracks = repository.getTracksForAlbumDirect(album.id)
+            if (tracks.isNotEmpty()) {
+                playerController?.appendTracks(tracks, album.coverUrl)
+            }
+            onCompleted?.invoke(tracks.size)
+        }
+    }
+
+    fun playAlbumNow(album: AlbumEntity, onCompleted: ((trackCount: Int) -> Unit)? = null) {
+        viewModelScope.launch {
+            val tracks = repository.getTracksForAlbumDirect(album.id)
+            if (tracks.isNotEmpty()) {
+                playerController?.clearAndPlayTracks(tracks, startIndex = 0, coverUrl = album.coverUrl)
+            }
+            onCompleted?.invoke(tracks.size)
+        }
+    }
+
+    fun addAlbumToPlaylist(albumId: String, playlistId: Long, onCompleted: ((trackCount: Int) -> Unit)? = null) {
+        viewModelScope.launch {
+            val tracks = repository.getTracksForAlbumDirect(albumId)
+            if (tracks.isNotEmpty()) {
+                repository.addTracksToPlaylist(playlistId, tracks)
+            }
+            onCompleted?.invoke(tracks.size)
+        }
+    }
+
+    fun createPlaylistWithAlbum(playlistName: String, albumId: String, onCompleted: ((trackCount: Int) -> Unit)? = null) {
+        viewModelScope.launch {
+            val tracks = repository.getTracksForAlbumDirect(albumId)
+            val newId = repository.createPlaylist(playlistName)
+            if (tracks.isNotEmpty()) {
+                repository.addTracksToPlaylist(newId, tracks)
+            }
+            onCompleted?.invoke(tracks.size)
+        }
+    }
+
+    fun saveCurrentQueueAsPlaylist(playlistName: String, onCompleted: ((trackCount: Int) -> Unit)? = null) {
+        viewModelScope.launch {
+            val queue = playerController?.currentPlaylistFlow?.value.orEmpty()
+            if (queue.isNotEmpty()) {
+                val newId = repository.createPlaylist(playlistName)
+                repository.addTracksToPlaylist(newId, queue)
+                onCompleted?.invoke(queue.size)
+            } else {
+                onCompleted?.invoke(0)
+            }
+        }
     }
 
     fun toggleFavoriteFilter() {

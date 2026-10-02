@@ -272,4 +272,54 @@ class AlbumDetailViewModel(
             }
         }
     }
+
+    val playlists = repository.getAllPlaylistsWithCount()
+        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+
+    fun appendAlbumToQueue() {
+        val currentTracks = tracks.value
+        if (currentTracks.isNotEmpty()) {
+            playerController.appendTracks(currentTracks, _album.value?.coverUrl)
+        }
+    }
+
+    fun appendTrackToQueue(track: TrackEntity) {
+        playerController.appendTracks(listOf(track), track.coverUrl ?: _album.value?.coverUrl)
+    }
+
+    fun addAlbumToPlaylist(playlistId: Long, onDone: ((Int) -> Unit)? = null) {
+        viewModelScope.launch {
+            val list = tracks.value
+            if (list.isNotEmpty()) {
+                repository.addTracksToPlaylist(playlistId, list)
+            }
+            onDone?.invoke(list.size)
+        }
+    }
+
+    fun addTrackToPlaylist(track: TrackEntity, playlistId: Long, onDone: (() -> Unit)? = null) {
+        viewModelScope.launch {
+            repository.addTracksToPlaylist(playlistId, listOf(track))
+            onDone?.invoke()
+        }
+    }
+
+    fun createPlaylistAndAddAlbum(name: String, onDone: ((Int) -> Unit)? = null) {
+        viewModelScope.launch {
+            val list = tracks.value
+            val newId = repository.createPlaylist(name)
+            if (list.isNotEmpty()) {
+                repository.addTracksToPlaylist(newId, list)
+            }
+            onDone?.invoke(list.size)
+        }
+    }
+
+    fun createPlaylistAndAddTrack(name: String, track: TrackEntity, onDone: (() -> Unit)? = null) {
+        viewModelScope.launch {
+            val newId = repository.createPlaylist(name)
+            repository.addTracksToPlaylist(newId, listOf(track))
+            onDone?.invoke()
+        }
+    }
 }
