@@ -12,8 +12,8 @@ android {
         applicationId = "com.nextcloud.musicplayer"
         minSdk = 26
         targetSdk = 36
-        versionCode = 13
-        versionName = "0.8.2"
+        versionCode = 14
+        versionName = "0.9.0-flick-dev"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -109,3 +109,27 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 }
+
+// Reproducible native build; generated .so files are not source-controlled.
+val buildFlickRust by tasks.registering(Exec::class) {
+    group = "build"
+    description = "Build the pinned Flick Rust engine for Android arm64"
+    workingDir = rootProject.file("native/flick")
+    commandLine("bash", "build-android.sh")
+    inputs.file(rootProject.file("native/flick/Cargo.toml"))
+    inputs.file(rootProject.file("native/flick/Cargo.lock"))
+    inputs.file(rootProject.file("native/flick/build-android.sh"))
+    inputs.file(rootProject.file("native/flick/build.rs"))
+    inputs.dir(rootProject.file("native/flick/src"))
+    inputs.dir(rootProject.file("native/flick/vendor"))
+    outputs.dir(layout.projectDirectory.dir("src/main/jniLibs/arm64-v8a"))
+}
+val copyFlickNotices by tasks.registering(Copy::class) {
+    into(layout.buildDirectory.dir("generated/flickAssets"))
+    into("flick") {
+        from(rootProject.file("native/flick/LICENSE"))
+        into("licenses") { from(rootProject.file("native/flick/licenses")) }
+    }
+}
+android.sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("generated/flickAssets").get().asFile)
+tasks.named("preBuild") { dependsOn(buildFlickRust, copyFlickNotices) }

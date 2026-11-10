@@ -1,0 +1,2251 @@
+//! Flutter Rust Bridge API for audio engine control.
+//!
+//! This module provides the interface between Dart and the Rust audio engine.
+//! Now available on all platforms including Android (using CPAL with Oboe backend).
+
+use crate::audio::commands::{AudioEvent, PlaybackState};
+use crate::audio::crossfeed::CrossfeedLevel;
+use crate::audio::decoder::{probe_file, probe_http, DecoderThread};
+use crate::audio::decoder_handle::{detect_file_type, DecoderHandle};
+#[cfg(target_os = "android")]
+use crate::audio::device::current_device_profile;
+use crate::audio::dsd_engine::dsd::{resolve_dsd_pcm_sample_rate, DsdOutputMode, DsdRate};
+use crate::audio::dsd_engine::format::open_dsd_decoder;
+use crate::audio::dsd_engine::DsdDecoderThread;
+use crate::audio::engine::AudioApiPreference;
+use crate::audio::equalizer::EqBandSpec;
+use crate::audio::manager::{AudioCapability, AudioCapabilitySnapshot, AudioEngine, EngineManager};
+use crate::audio::source::{PlaybackRange, SourceIdentity};
+use crate::audio::strategy::OutputStrategy;
+use crate::audio::wavpack_thread::WavpackDecoderThread;
+use log::{info as log_info, warn as log_warn};
+use once_cell::sync::Lazy;
+use serde::Serialize;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
+use std::sync::Mutex;
+
+static ENGINE_MANAGER: Lazy<EngineManager> = Lazy::new(EngineManager::new);
+
+// Default Auto, not PcmDecimation: FRB runs calls on a worker pool, so the
+// Dart-side sync can race the first audio_play. Never decimate DSD to PCM.
+static DSD_OUTPUT_MODE: AtomicU8 = AtomicU8::new(3);
+static CURRENT_DSD_TRACK_RATE: AtomicU32 = AtomicU32::new(0);
+/// Source channel count of the DSD track currently being negotiated; 0 =
+/// unknown. Keeps the engine's mode decision and `audio_play` in agreement
+/// for multichannel sources without changing any exported signature.
+static CURRENT_DSD_SOURCE_CHANNELS: AtomicU32 = AtomicU32::new(0);
+static PENDING_VOLUME: AtomicU32 = AtomicU32::new(0);
+
+const PENDING_VOLUME_NONE: u32 = 0xFFFF_FFFF;
+
+// ponytail: mirror of the last volume the app pushed. PENDING_VOLUME is
+// one-shot and gets consumed on the first engine recreate, so reopening the
+// stream on a sample-rate change (e.g. a 96k track) would otherwise drop the
+// new engine to the CallbackData default of 1.0 = full-scale blast. This is
+// the fallback for that case.
+static LAST_VOLUME: AtomicU32 = AtomicU32::new(1.0f32.to_bits());
+
+static PENDING_XF_ENABLED: AtomicU8 = AtomicU8::new(u8::MAX);
+static PENDING_XF_DURATION: AtomicU32 = AtomicU32::new(0xFFFF_FFFF);
+static PENDING_XF_CURVE: AtomicU8 = AtomicU8::new(u8::MAX);
+
+// While crossfade is enabled the output clock stays pinned to the rate of
+// the track that started playback, so mismatched-rate successors can still be
+// queued and faded; explicit plays still renegotiate to the native rate.
+static CROSSFADE_PINS_OUTPUT_RATE: AtomicBool = AtomicBool::new(false);
+
+// ponytail: pending EQ so it survives engine recreation. A USB DAC rebuilds
+// the engine on a sample-rate change between tracks; volume and crossfade are
+// already re-applied on the fresh handle, but EQ was dropped — so it worked
+// on the first track and silently vanished on the next (issue #211). EqBandSpec
+// is Copy but the band list is a Vec, so this needs a Mutex, not atomics.
+static PENDING_EQ: Lazy<Mutex<Option<(bool, f32, Vec<EqBandSpec>)>>> =
+    Lazy::new(|| Mutex::new(None));
+
+// ponytail: pending crossfeed level (0..3, u32::MAX = none) so it survives
+// engine recreation like EQ — a USB DAC rebuilds the engine on a sample-rate
+// change between tracks and would otherwise drop it.
+static PENDING_CROSSFEED: AtomicU32 = AtomicU32::new(u32::MAX);
+
+pub fn current_dsd_output_mode() -> DsdOutputMode {
+    match DSD_OUTPUT_MODE.load(Ordering::Relaxed) {
+        1 => DsdOutputMode::Dop,
+        2 => DsdOutputMode::Native,
+        3 => DsdOutputMode::Auto,
+        _ => DsdOutputMode::PcmDecimation,
+    }
+}
+
+pub fn effective_dsd_output_mode(requested: DsdOutputMode) -> DsdOutputMode {
+    let dsd_rate = current_dsd_track_rate().and_then(DsdRate::from_sample_rate);
+    effective_dsd_output_mode_for_rate_and_channels(
+        requested,
+        dsd_rate,
+        current_dsd_source_channels(),
+    )
+}
+
+/// FRB-exported wrapper kept signature-stable. Callers that know the source
+/// channel count should use `effective_dsd_output_mode_for_rate_and_channels`.
+pub fn effective_dsd_output_mode_for_rate(
+    requested: DsdOutputMode,
+    dsd_rate: Option<DsdRate>,
+) -> DsdOutputMode {
+    effective_dsd_output_mode_for_rate_and_channels(requested, dsd_rate, None)
+}
+
+pub(crate) fn effective_dsd_output_mode_for_rate_and_channels(
+    requested: DsdOutputMode,
+    dsd_rate: Option<DsdRate>,
+    source_channels: Option<u16>,
+) -> DsdOutputMode {
+    let is_dsd256_plus = dsd_rate.is_some_and(|r| matches!(r, DsdRate::Dsd256 | DsdRate::Dsd512));
+
+    // Capability of the registered UAC2 DAC, from its discovered alt settings.
+    // These are populated at registration (before the stream starts), so this
+    // avoids the chicken-and-egg with create_audio_engine (which only starts the
+    // stream AFTER the output mode is decided). This mirrors the capability
+    // checks in engine.rs so the DSD-engine output mode and the chosen USB
+    // transport always agree — preventing DSD-as-PCM corruption.
+    #[cfg(all(feature = "uac2", target_os = "android"))]
+    let (usb_registered, usb_native_capable, usb_dop_capable) = {
+        let debug = crate::uac2::android_direct_debug_state();
+        let carrier = dsd_rate.map(|r| r.dop_carrier_rate()).unwrap_or(0);
+        let native = debug.registered
+            && debug.available_alt_settings.iter().any(|alt| {
+                alt.format_tag == "DSD"
+                    && alt.subslot_size > 0
+                    && source_channels.map_or(true, |channels| alt.channels == channels)
+                    && dsd_rate.is_some_and(|r| {
+                        let wire = r.sample_rate() / (8 * u32::from(alt.subslot_size));
+                        alt.sample_rates.is_empty()
+                            || wire <= alt.sample_rates.iter().copied().max().unwrap_or(0)
+                            || alt.sample_rates.iter().any(|&sr| sr == wire)
+                    })
+            });
+        let dop = debug.registered
+            && debug.available_alt_settings.iter().any(|alt| {
+                alt.format_tag == "PCM"
+                    && alt.bit_resolution >= 24
+                    && source_channels.map_or(true, |channels| alt.channels == channels)
+                    && alt.sample_rates.iter().any(|&sr| sr == carrier)
+            });
+        (debug.registered, native, dop)
+    };
+    #[cfg(not(all(feature = "uac2", target_os = "android")))]
+    let (_usb_registered, _usb_native_capable, usb_dop_capable) = (false, false, false);
+    #[cfg(not(all(feature = "uac2", target_os = "android")))]
+    let _ = source_channels;
+
+    // A direct USB request never silently becomes PCM. Let stream negotiation
+    // refuse unsupported native/DoP, with an explicit PCM choice in the UI.
+    // Multichannel sources are the one format-level exception: a stereo DAC's
+    // wired DSD alts cannot carry them at all, so Auto degrades to a PCM
+    // stereo fold-down; explicit Native/DoP keep their mode and surface the
+    // actionable channel-mismatch error instead of being silently converted.
+    #[cfg(all(feature = "uac2", target_os = "android"))]
+    if usb_registered {
+        let multichannel = source_channels.is_some_and(|channels| channels > 2);
+        return match requested {
+            DsdOutputMode::PcmDecimation => DsdOutputMode::PcmDecimation,
+            DsdOutputMode::Dop => DsdOutputMode::Dop,
+            DsdOutputMode::Native | DsdOutputMode::Auto if usb_native_capable => {
+                DsdOutputMode::Native
+            }
+            DsdOutputMode::Auto if multichannel => {
+                log_info!(
+                    "[AUDIO] Auto DSD with {} source channels cannot ride the wired USB alts; using PCM decimation stereo fold-down",
+                    source_channels.unwrap_or(0)
+                );
+                DsdOutputMode::PcmDecimation
+            }
+            _ => DsdOutputMode::Dop,
+        };
+    }
+
+    match requested {
+        DsdOutputMode::PcmDecimation => return DsdOutputMode::PcmDecimation,
+        DsdOutputMode::Dop => {
+            if is_dsd256_plus && !usb_dop_capable {
+                log_info!(
+                    "[AUDIO] DoP requested for DSD256+ but no UAC2 DoP-capable alt at carrier; \
+                     falling back to PCM decimation"
+                );
+                return DsdOutputMode::PcmDecimation;
+            }
+            return DsdOutputMode::Dop;
+        }
+        DsdOutputMode::Native | DsdOutputMode::Auto => {}
+    }
+
+    // Native/Auto DSD delivery routes:
+    // 1. UAC2 direct USB native DSD (raw DSD bitstream via isochronous transfers)
+    // 2. Android AudioTrack with ENCODING_DSD (direct to internal DAC)
+    // 3. DoP fallback
+
+    #[cfg(all(feature = "uac2", target_os = "android"))]
+    if usb_native_capable {
+        log_info!(
+            "[AUDIO] {:?} DSD: registered UAC2 DAC exposes a native-DSD alt; using native USB",
+            requested
+        );
+        return DsdOutputMode::Native;
+    }
+
+    #[cfg(target_os = "android")]
+    {
+        let profile = crate::audio::device::current_device_profile();
+        let supports_dsd = profile.as_ref().is_some_and(|p| p.supports_native_dsd);
+        if supports_dsd {
+            log_info!(
+                "[AUDIO] {:?} DSD requested; device supports ENCODING_DSD, \
+                 using Android DSD AudioTrack",
+                requested
+            );
+            return DsdOutputMode::Native;
+        }
+    }
+
+    // DSD256+ without any native or UAC2 DoP path: go straight to PCM
+    if is_dsd256_plus && !usb_dop_capable {
+        log_info!(
+            "[AUDIO] DSD256+ with no native DSD or UAC2 DoP path; falling back to PCM decimation"
+        );
+        return DsdOutputMode::PcmDecimation;
+    }
+
+    // Auto: prefer DoP over PCM decimation when a DoP-capable UAC2 alt exists
+    if requested == DsdOutputMode::Auto {
+        #[cfg(target_os = "android")]
+        {
+            let profile = crate::audio::device::current_device_profile();
+            let is_dap = profile.as_ref().is_some_and(|p| p.is_dap());
+            if is_dap {
+                // A managed stream can only carry a verifiable DoP carrier
+                // when the engine may request an exclusive route, which on
+                // DAPs is gated by DAP bit-perfect mode (mirrors
+                // managed_prefer_exclusive in create_audio_engine). Without
+                // it the shared mixer route fails DoP verification, and the
+                // DoP-configured stream would then misinterpret decimated
+                // PCM, so go straight to the PCM decimation fallback.
+                if ENGINE_MANAGER.get_dap_bit_perfect_enabled() {
+                    log_info!(
+                        "[AUDIO] Auto DSD: device is DAP with bit-perfect mode; \
+                         attempting DoP"
+                    );
+                    return DsdOutputMode::Dop;
+                }
+                log_info!(
+                    "[AUDIO] Auto DSD: device is DAP but the managed route cannot \
+                     verify a DoP carrier (bit-perfect mode off); using PCM decimation"
+                );
+                return DsdOutputMode::PcmDecimation;
+            }
+        }
+
+        #[cfg(all(feature = "uac2", target_os = "android"))]
+        if usb_dop_capable {
+            log_info!(
+                "[AUDIO] Auto DSD: registered UAC2 DAC exposes a DoP-capable PCM alt; using DoP"
+            );
+            return DsdOutputMode::Dop;
+        }
+
+        log_info!(
+            "[AUDIO] Auto DSD: no native DSD or DoP path available; \
+             falling back to PCM decimation"
+        );
+        return DsdOutputMode::PcmDecimation;
+    }
+
+    #[cfg(target_os = "android")]
+    if !(ENGINE_MANAGER.get_dap_bit_perfect_enabled()
+        && crate::audio::device::current_device_profile().is_some_and(|p| p.is_dap()))
+    {
+        log_info!(
+            "[AUDIO] Native DSD requested but no direct DSD path available and the \
+             managed route cannot verify a DoP carrier; falling back to PCM decimation"
+        );
+        return DsdOutputMode::PcmDecimation;
+    }
+
+    log_info!(
+        "[AUDIO] Native DSD requested but no direct DSD path available; \
+         falling back to DoP (bit-perfect DSD over PCM carrier)"
+    );
+    DsdOutputMode::Dop
+}
+
+pub fn set_dsd_track_rate(rate: u32) {
+    CURRENT_DSD_TRACK_RATE.store(rate, Ordering::Relaxed);
+}
+
+// Why the last native-DSD attempt fell back (SAS offload / ALSA reasons), so
+// diagnostics can say more than "native unavailable".
+static LAST_DSD_NATIVE_FAILURE: Lazy<Mutex<Option<String>>> =
+    Lazy::new(|| Mutex::new(None));
+
+pub fn last_dsd_native_failure() -> Option<String> {
+    LAST_DSD_NATIVE_FAILURE
+        .lock()
+        .ok()
+        .and_then(|guard| guard.clone())
+}
+
+pub fn clear_dsd_native_failure() {
+    if let Ok(mut guard) = LAST_DSD_NATIVE_FAILURE.lock() {
+        *guard = None;
+    }
+}
+
+fn record_dsd_native_failure(error: &str) {
+    let reason = error
+        .strip_prefix("DSD_NATIVE_FALLBACK:")
+        .unwrap_or(error)
+        .to_string();
+    if let Ok(mut guard) = LAST_DSD_NATIVE_FAILURE.lock() {
+        *guard = Some(reason);
+    }
+}
+
+pub fn clear_dsd_track_rate() {
+    CURRENT_DSD_TRACK_RATE.store(0, Ordering::Relaxed);
+    CURRENT_DSD_SOURCE_CHANNELS.store(0, Ordering::Relaxed);
+}
+
+pub fn current_dsd_track_rate() -> Option<u32> {
+    let rate = CURRENT_DSD_TRACK_RATE.load(Ordering::Relaxed);
+    if rate > 0 {
+        Some(rate)
+    } else {
+        None
+    }
+}
+
+pub fn set_dsd_source_channels(channels: u16) {
+    CURRENT_DSD_SOURCE_CHANNELS.store(u32::from(channels), Ordering::Relaxed);
+}
+
+pub fn current_dsd_source_channels() -> Option<u16> {
+    match CURRENT_DSD_SOURCE_CHANNELS.load(Ordering::Relaxed) {
+        0 => None,
+        channels => u16::try_from(channels).ok(),
+    }
+}
+
+pub fn set_pending_volume(volume: f32) {
+    PENDING_VOLUME.store(volume.to_bits(), Ordering::Relaxed);
+    LAST_VOLUME.store(volume.to_bits(), Ordering::Relaxed);
+}
+
+pub fn take_pending_volume() -> Option<f32> {
+    let bits = PENDING_VOLUME.load(Ordering::Relaxed);
+    if bits == PENDING_VOLUME_NONE {
+        return None;
+    }
+    PENDING_VOLUME.store(PENDING_VOLUME_NONE, Ordering::Relaxed);
+    Some(f32::from_bits(bits))
+}
+
+pub fn last_volume() -> f32 {
+    f32::from_bits(LAST_VOLUME.load(Ordering::Relaxed))
+}
+
+pub fn set_pending_crossfade(enabled: bool, duration_secs: f32) {
+    PENDING_XF_ENABLED.store(if enabled { 1 } else { 0 }, Ordering::Relaxed);
+    PENDING_XF_DURATION.store(duration_secs.to_bits(), Ordering::Relaxed);
+}
+
+pub fn set_pending_crossfade_curve(curve: crate::audio::crossfader::CrossfadeCurve) {
+    let raw = match curve {
+        crate::audio::crossfader::CrossfadeCurve::EqualPower => 0,
+        crate::audio::crossfader::CrossfadeCurve::Linear => 1,
+        crate::audio::crossfader::CrossfadeCurve::SquareRoot => 2,
+        crate::audio::crossfader::CrossfadeCurve::SCurve => 3,
+    };
+    PENDING_XF_CURVE.store(raw, Ordering::Relaxed);
+}
+
+pub fn take_pending_crossfade() -> Option<(bool, f32, crate::audio::crossfader::CrossfadeCurve)> {
+    let enabled_raw = PENDING_XF_ENABLED.swap(u8::MAX, Ordering::Relaxed);
+    if enabled_raw == u8::MAX {
+        return None;
+    }
+    let enabled = enabled_raw == 1;
+    let dur_bits = PENDING_XF_DURATION.swap(0xFFFF_FFFF, Ordering::Relaxed);
+    let duration_secs = if dur_bits == 0xFFFF_FFFF {
+        3.0
+    } else {
+        f32::from_bits(dur_bits)
+    };
+    let curve_raw = PENDING_XF_CURVE.swap(u8::MAX, Ordering::Relaxed);
+    let curve = match curve_raw {
+        1 => crate::audio::crossfader::CrossfadeCurve::Linear,
+        2 => crate::audio::crossfader::CrossfadeCurve::SquareRoot,
+        3 => crate::audio::crossfader::CrossfadeCurve::SCurve,
+        _ => crate::audio::crossfader::CrossfadeCurve::EqualPower,
+    };
+    Some((enabled, duration_secs, curve))
+}
+
+pub fn set_pending_equalizer(enabled: bool, preamp_db: f32, specs: Vec<EqBandSpec>) {
+    *PENDING_EQ.lock().expect("pending eq poisoned") = Some((enabled, preamp_db, specs));
+}
+
+pub fn take_pending_equalizer() -> Option<(bool, f32, Vec<EqBandSpec>)> {
+    PENDING_EQ.lock().expect("pending eq poisoned").take()
+}
+
+pub fn set_pending_crossfeed(level: u8) {
+    PENDING_CROSSFEED.store(level as u32, Ordering::Relaxed);
+}
+
+pub fn take_pending_crossfeed() -> Option<u8> {
+    let raw = PENDING_CROSSFEED.swap(u32::MAX, Ordering::Relaxed);
+    if raw == u32::MAX {
+        None
+    } else {
+        Some(raw as u8)
+    }
+}
+
+pub(crate) fn with_audio_engine<T>(
+    f: impl FnOnce(&crate::audio::engine::AudioEngineHandle) -> Result<T, String>,
+) -> Result<T, String> {
+    ENGINE_MANAGER.with_rust_handle(f)
+}
+
+pub(crate) fn read_audio_engine<T>(
+    f: impl FnOnce(&crate::audio::engine::AudioEngineHandle) -> T,
+) -> Option<T> {
+    ENGINE_MANAGER.read_rust_handle(f)
+}
+
+fn ensure_audio_engine(preferred_sample_rate: Option<u32>) -> Result<(), String> {
+    ENGINE_MANAGER.ensure_rust_engine(preferred_sample_rate, vec![])
+}
+
+fn ensure_audio_engine_excluded(
+    preferred_sample_rate: Option<u32>,
+    excluded: Vec<OutputStrategy>,
+) -> Result<(), String> {
+    ENGINE_MANAGER.ensure_rust_engine(preferred_sample_rate, excluded)
+}
+
+fn resolve_requested_output_sample_rate(
+    preferred_sample_rate: Option<u32>,
+) -> Result<Option<u32>, String> {
+    #[cfg(all(feature = "uac2", target_os = "android"))]
+    {
+        return crate::uac2::negotiate_android_direct_output_sample_rate(preferred_sample_rate);
+    }
+
+    #[allow(unreachable_code)]
+    Ok(preferred_sample_rate)
+}
+
+fn resolve_track_playback_output_sample_rate(
+    preferred_sample_rate: Option<u32>,
+) -> Result<Option<u32>, String> {
+    // Lying container headers (1 Hz ALAC stsd) must not become output configs.
+    let preferred_sample_rate =
+        preferred_sample_rate.filter(|rate| crate::audio::decoder::plausible_sample_rate(*rate));
+
+    #[cfg(target_os = "android")]
+    {
+        let route_type = ENGINE_MANAGER.capability_route_type();
+        #[cfg(feature = "uac2")]
+        let usb_direct_active = crate::uac2::android_direct_usb_enabled();
+        #[cfg(not(feature = "uac2"))]
+        let usb_direct_active = false;
+        let should_preserve_existing_rate = !ENGINE_MANAGER.is_high_res_mode_enabled()
+            && !ENGINE_MANAGER.get_dap_bit_perfect_enabled()
+            && matches!(route_type.as_str(), "unknown" | "internal" | "wired")
+            && current_device_profile().is_some_and(|profile| profile.is_dap())
+            && !usb_direct_active;
+        if let Some(existing_rate) = should_preserve_existing_rate
+            .then(|| read_audio_engine(|handle| handle.sample_rate()))
+            .flatten()
+            .filter(|rate| crate::audio::decoder::plausible_sample_rate(*rate))
+        {
+            return Ok(Some(existing_rate));
+        }
+    }
+
+    resolve_requested_output_sample_rate(preferred_sample_rate)
+}
+
+/// Resolve the engine output rate for an already-resolved effective DSD mode.
+/// Callers must pass a mode derived from the *track being planned*
+/// (`effective_dsd_output_mode_for_rate`), not from the global/current-track
+/// state — otherwise a queue-time plan can drift from what playback needs.
+fn resolve_dsd_engine_sample_rate(
+    path: &PathBuf,
+    effective_mode: DsdOutputMode,
+) -> Result<Option<u32>, String> {
+    if effective_mode == DsdOutputMode::Dop {
+        let decoder = open_dsd_decoder(path)
+            .map_err(|e| format!("Failed to probe DSD rate for {}: {}", path.display(), e))?;
+        let dsd_rate = DsdRate::from_sample_rate(decoder.sample_rate())
+            .ok_or_else(|| format!("Unsupported DSD sample rate: {}", decoder.sample_rate()))?;
+        let carrier = dsd_rate.dop_carrier_rate();
+        log_info!(
+            "[AUDIO] DSD DoP: dsd_rate={} Hz -> carrier={} Hz",
+            dsd_rate.sample_rate(),
+            carrier
+        );
+        return resolve_requested_output_sample_rate(Some(carrier));
+    }
+    let decoder = open_dsd_decoder(path)
+        .map_err(|e| format!("Failed to probe DSD rate for {}: {}", path.display(), e))?;
+    let dsd_rate = DsdRate::from_sample_rate(decoder.sample_rate())
+        .ok_or_else(|| format!("Unsupported DSD sample rate: {}", decoder.sample_rate()))?;
+    if effective_mode == DsdOutputMode::Native {
+        #[cfg(target_os = "android")]
+        {
+            let use_audio_track = current_device_profile()
+                .as_ref()
+                .is_some_and(|p| p.supports_native_dsd)
+                && !{
+                    #[cfg(feature = "uac2")]
+                    {
+                        crate::uac2::is_usb_session_active()
+                    }
+                    #[cfg(not(feature = "uac2"))]
+                    {
+                        false
+                    }
+                };
+            let frame_rate = dsd_rate.byte_rate();
+            if use_audio_track {
+                log_info!(
+                    "[AUDIO] DSD Native AudioTrack: dsd_rate={} Hz -> frame_rate={} Hz",
+                    dsd_rate.sample_rate(),
+                    frame_rate
+                );
+                return resolve_requested_output_sample_rate(Some(frame_rate));
+            }
+            #[cfg(feature = "uac2")]
+            {
+                if crate::uac2::is_usb_session_active() {
+                    log_info!(
+                        "[AUDIO] DSD Native USB: dsd_rate={} Hz -> frame_rate={} Hz",
+                        dsd_rate.sample_rate(),
+                        frame_rate
+                    );
+                    return resolve_requested_output_sample_rate(Some(frame_rate));
+                }
+            }
+        }
+
+        #[cfg(not(target_os = "android"))]
+        {
+            return resolve_requested_output_sample_rate(Some(dsd_rate.byte_rate()));
+        }
+
+        #[cfg(target_os = "android")]
+        {
+            return resolve_requested_output_sample_rate(Some(dsd_rate.byte_rate()));
+        }
+    }
+    let existing_rate = read_audio_engine(|handle| handle.sample_rate()).unwrap_or(0);
+    let target = resolve_dsd_pcm_sample_rate(dsd_rate, existing_rate);
+    log_info!(
+        "[AUDIO] DSD PCM decimation: dsd_rate={} Hz, existing_engine={} Hz -> target={} Hz",
+        dsd_rate.sample_rate(),
+        existing_rate,
+        target
+    );
+    resolve_requested_output_sample_rate(Some(target))
+}
+
+fn verify_dsd_engine_rate(
+    path: &PathBuf,
+    mode: DsdOutputMode,
+    engine_rate: u32,
+) -> Result<(), String> {
+    if !matches!(mode, DsdOutputMode::Native | DsdOutputMode::Dop) {
+        return Ok(());
+    }
+    let decoder = open_dsd_decoder(path)
+        .map_err(|e| format!("Failed to probe DSD rate for {}: {}", path.display(), e))?;
+    let dsd_rate = DsdRate::from_sample_rate(decoder.sample_rate())
+        .ok_or_else(|| format!("Unsupported DSD sample rate: {}", decoder.sample_rate()))?;
+    let required_rate = match mode {
+        DsdOutputMode::Native => {
+            #[cfg(all(feature = "uac2", target_os = "android"))]
+            if read_audio_engine(|handle| handle.output_runtime().direct_usb_active).unwrap_or(false) {
+                let debug = crate::uac2::android_direct_debug_state();
+                let subslot = debug.transport_subslot_size.filter(|&s| matches!(s, 1 | 2 | 4))
+                    .ok_or_else(|| "USB native DSD subslot is not verified".to_string())?;
+                dsd_rate.sample_rate() / (8 * u32::from(subslot))
+            } else { dsd_rate.byte_rate() }
+            #[cfg(not(all(feature = "uac2", target_os = "android")))]
+            { dsd_rate.byte_rate() }
+        },
+        DsdOutputMode::Dop => dsd_rate.dop_carrier_rate(),
+        _ => return Ok(()),
+    };
+    if engine_rate != required_rate {
+        return Err(format!(
+            "DSD {:?} playback requires the output to run at exactly {} Hz, \
+             but the engine is running at {} Hz. The current audio backend \
+             does not support this DSD mode. Switch to PCM Decimation or \
+             connect a DSD-capable DAC and enable direct USB mode.",
+            mode, required_rate, engine_rate
+        ));
+    }
+    Ok(())
+}
+
+fn verify_dop_passthrough(engine_rate: u32) -> Result<(), String> {
+    let verified = read_audio_engine(|handle| {
+        let rt = handle.output_runtime();
+        rt.strategy == OutputStrategy::DsdDoP.as_str()
+            && rt.actual_sample_rate == engine_rate && rt.requested_sample_rate == engine_rate
+            && rt.passthrough_allowed && !rt.resampler_active
+            && (!rt.direct_usb_active || rt.direct_usb_verified)
+    });
+    if verified.unwrap_or(false) {
+        log::info!("[AUDIO] DoP carrier pre-flight OK: wire_rate={}", engine_rate);
+        return Ok(());
+    }
+    Err(format!(
+        "DoP carrier verification failed at {} Hz; select PCM Decimation explicitly if needed",
+        engine_rate
+    ))
+}
+
+/// Engine default when no rate preference is known — mirrors
+/// `create_audio_engine`'s `preferred_sample_rate.unwrap_or(48_000)`.
+const DEFAULT_ENGINE_SAMPLE_RATE: u32 = 48_000;
+
+/// Output configuration a track needs if it is started with the full
+/// `audio_play` negotiation. Gapless queueing is only valid when the live
+/// engine already matches this plan; otherwise the engine must be
+/// renegotiated (recreated) at the track boundary.
+#[derive(Debug, Clone, Copy)]
+struct TrackEnginePlan {
+    /// Output rate the engine would run at for this track.
+    sample_rate: u32,
+    /// True when the track's samples must be pushed as raw DSD wire words
+    /// (DoP carrier or native byte stream).
+    is_raw: bool,
+    /// Effective DSD delivery mode for DSD tracks; None for PCM.
+    dsd_mode: Option<DsdOutputMode>,
+}
+
+/// Compute the engine configuration a track would require, mirroring the
+/// negotiation `audio_play` performs for the same file.
+fn plan_track_engine_config(path: &PathBuf) -> Result<TrackEnginePlan, String> {
+    match detect_file_type(path) {
+        crate::audio::decoder_handle::FileType::Dsd => {
+            let decoder = open_dsd_decoder(path)
+                .map_err(|e| format!("Failed to probe DSD rate for {}: {}", path.display(), e))?;
+            let dsd_rate = DsdRate::from_sample_rate(decoder.sample_rate())
+                .ok_or_else(|| format!("Unsupported DSD sample rate: {}", decoder.sample_rate()))?;
+            let mode = effective_dsd_output_mode_for_rate_and_channels(
+                current_dsd_output_mode(),
+                Some(dsd_rate),
+                Some(decoder.channels()),
+            );
+            let sample_rate =
+                resolve_dsd_engine_sample_rate(path, mode)?.unwrap_or(DEFAULT_ENGINE_SAMPLE_RATE);
+            Ok(TrackEnginePlan {
+                sample_rate,
+                is_raw: matches!(mode, DsdOutputMode::Dop | DsdOutputMode::Native),
+                dsd_mode: Some(mode),
+            })
+        }
+        crate::audio::decoder_handle::FileType::Standard => {
+            let probe_result = probe_file(path.as_path())
+                .map_err(|error| format!("Failed to probe {}: {}", path.display(), error))?;
+            let sample_rate = resolve_track_playback_output_sample_rate(Some(
+                probe_result.source_info.original_sample_rate,
+            ))?
+            .unwrap_or(DEFAULT_ENGINE_SAMPLE_RATE);
+            Ok(TrackEnginePlan {
+                sample_rate,
+                is_raw: false,
+                dsd_mode: None,
+            })
+        }
+        crate::audio::decoder_handle::FileType::WavPack => {
+            let sample_rate = resolve_track_playback_output_sample_rate(
+                crate::audio::wavpack_thread::wavpack_pcm_sample_rate(path),
+            )?
+            .unwrap_or(DEFAULT_ENGINE_SAMPLE_RATE);
+            Ok(TrackEnginePlan {
+                sample_rate,
+                is_raw: false,
+                dsd_mode: None,
+            })
+        }
+    }
+}
+
+/// True when a track can ride the live engine's fixed clock and pipeline
+/// state without renegotiation. DSD↔PCM and rate-changing boundaries cannot
+/// be gapless: queueing them would push the decoder into the old clock or
+/// raw-DSD pipeline (audible distortion). The caller skips the queue and the
+/// track-ended fallback replays with full renegotiation instead.
+fn queue_compatible_with_engine(
+    engine_sample_rate: u32,
+    engine_is_raw: bool,
+    plan: &TrackEnginePlan,
+) -> bool {
+    engine_sample_rate == plan.sample_rate && engine_is_raw == plan.is_raw
+}
+
+/// What to do with a successor track against the live engine's fixed config.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QueuePlanDecision {
+    /// Same clock and pipeline: queue as-is for gapless/crossfade.
+    Compatible,
+    /// Crossfade pins the output clock: decode the successor at the engine
+    /// rate so the boundary can still crossfade.
+    PinResampleToEngineRate,
+    /// Let the track-ended fallback renegotiate the output.
+    Skip,
+}
+
+/// Decide how to queue a successor against the live engine.
+///
+/// `queue_compatible_with_engine` alone can never fade a rate-changing
+/// boundary because the successor is skipped. While crossfade pins the output
+/// clock, PCM successors (never DSD/raw) are decoded at the engine rate
+/// instead.
+fn decide_queue_plan(
+    engine_sample_rate: u32,
+    engine_is_raw: bool,
+    plan: &TrackEnginePlan,
+    crossfade_pins_output_rate: bool,
+) -> QueuePlanDecision {
+    if queue_compatible_with_engine(engine_sample_rate, engine_is_raw, plan) {
+        return QueuePlanDecision::Compatible;
+    }
+    if crossfade_pins_output_rate && !engine_is_raw && !plan.is_raw && plan.dsd_mode.is_none() {
+        return QueuePlanDecision::PinResampleToEngineRate;
+    }
+    QueuePlanDecision::Skip
+}
+
+fn prepare_decoder_source(
+    path: &PathBuf,
+    planned_dsd_mode: Option<DsdOutputMode>,
+    output_sample_rate: u32,
+    output_channels: usize,
+    range: PlaybackRange,
+) -> Result<(crate::audio::source::AudioSource, DecoderHandle), String> {
+    match detect_file_type(path) {
+        crate::audio::decoder_handle::FileType::Dsd => {
+            // Use the per-track mode from the plan when available; fall back
+            // to the current-track-derived mode for callers without a plan.
+            let effective_mode = planned_dsd_mode
+                .unwrap_or_else(|| effective_dsd_output_mode(current_dsd_output_mode()));
+            verify_dsd_engine_rate(path, effective_mode, output_sample_rate)?;
+            let (source, thread) = DsdDecoderThread::spawn(
+                path.clone(),
+                effective_mode,
+                output_sample_rate,
+                output_channels,
+            )
+            .map_err(|e| format!("Failed to decode DSD {}: {}", path.display(), e))?;
+            Ok((source, DecoderHandle::Dsd(thread)))
+        }
+        crate::audio::decoder_handle::FileType::WavPack => {
+            let (source, handle) =
+                WavpackDecoderThread::spawn(path.clone(), output_sample_rate, output_channels)
+                    .map_err(|e| format!("Failed to decode WavPack {}: {}", path.display(), e))?;
+            Ok((source, handle))
+        }
+        crate::audio::decoder_handle::FileType::Standard => {
+            let probe_result = probe_file(path.as_path())
+                .map_err(|error| format!("Failed to probe {}: {}", path.display(), error))?;
+            let file_rate = probe_result.source_info.original_sample_rate;
+            if output_sample_rate != file_rate {
+                log_warn!(
+                    "[AUDIO] engine_sample_rate_hz={} decoded_file_sample_rate_hz={} — decoder resampling active",
+                    output_sample_rate,
+                    file_rate
+                );
+            } else {
+                log_info!(
+                    "[AUDIO] engine_sample_rate_hz matches decoded_file_sample_rate_hz ({} Hz); decoder resampling off",
+                    file_rate
+                );
+            }
+
+            let (source, thread) = DecoderThread::spawn_from_probe_result(
+                probe_result,
+                output_sample_rate,
+                output_channels,
+                None,
+                range,
+            )
+            .map_err(|error| format!("Failed to decode {}: {}", path.display(), error))?;
+            Ok((source, DecoderHandle::Symphonia(thread)))
+        }
+    }
+}
+
+// ============================================================================
+// SHARED TYPES (available on all platforms)
+// ============================================================================
+
+/// Progress information returned to Dart.
+#[derive(Debug, Clone)]
+pub struct AudioProgress {
+    /// Current position in seconds
+    pub position_secs: f64,
+    /// Total duration in seconds (if known)
+    pub duration_secs: Option<f64>,
+    /// Buffer fill level (0.0 to 1.0)
+    pub buffer_level: f32,
+}
+
+/// Audio event types for Dart.
+#[derive(Debug, Clone)]
+pub enum AudioEventType {
+    StateChanged {
+        state: String,
+    },
+    Progress {
+        position_secs: f64,
+        duration_secs: Option<f64>,
+        buffer_level: f32,
+    },
+    TrackEnded {
+        source: SourceIdentity,
+    },
+    CrossfadeStarted {
+        from: SourceIdentity,
+        to: SourceIdentity,
+    },
+    Error {
+        message: String,
+    },
+    NextTrackReady {
+        source: SourceIdentity,
+    },
+}
+
+/// Crossfade curve type for Dart.
+#[derive(Debug, Clone, Copy)]
+pub enum CrossfadeCurveType {
+    EqualPower,
+    Linear,
+    SquareRoot,
+    SCurve,
+}
+
+/// The currently available output capability classes for engine selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioCapabilityType {
+    UsbDac,
+    HiResInternal,
+    Standard,
+}
+
+impl From<AudioCapability> for AudioCapabilityType {
+    fn from(value: AudioCapability) -> Self {
+        match value {
+            AudioCapability::UsbDac => Self::UsbDac,
+            AudioCapability::HiResInternal => Self::HiResInternal,
+            AudioCapability::Standard => Self::Standard,
+        }
+    }
+}
+
+impl From<AudioCapabilityType> for AudioCapability {
+    fn from(value: AudioCapabilityType) -> Self {
+        match value {
+            AudioCapabilityType::UsbDac => Self::UsbDac,
+            AudioCapabilityType::HiResInternal => Self::HiResInternal,
+            AudioCapabilityType::Standard => Self::Standard,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct AudioCapabilityInfo {
+    pub capabilities: Vec<AudioCapabilityType>,
+    pub route_type: String,
+    pub route_label: Option<String>,
+    pub max_sample_rate: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AudioRuntimeDebugState {
+    pub manager_engine: String,
+    pub rust_initialized: bool,
+    pub output_signature: Option<String>,
+    pub sample_rate: Option<u32>,
+    pub channels: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AudioRuntimeDebugJsonState {
+    pub manager_engine: String,
+    pub rust_initialized: bool,
+    pub output_signature: Option<String>,
+    pub sample_rate: Option<u32>,
+    pub channels: Option<usize>,
+    pub output_strategy: Option<String>,
+    pub requested_sample_rate: Option<u32>,
+    pub actual_sample_rate: Option<u32>,
+    pub resampler_active: Option<bool>,
+    pub passthrough_allowed: Option<bool>,
+    pub verification_reason: Option<String>,
+    pub direct_usb_active: Option<bool>,
+    pub direct_usb_verified: Option<bool>,
+    pub dsd_source_rate: Option<u32>,
+    pub dsd_effective_mode: Option<String>,
+    pub dsd_wire_rate: Option<u32>,
+    pub dsd_transport: Option<String>,
+    pub active_audio_api: Option<String>,
+}
+
+impl From<AudioCapabilitySnapshot> for AudioCapabilityInfo {
+    fn from(value: AudioCapabilitySnapshot) -> Self {
+        Self {
+            capabilities: value.capabilities.into_iter().map(Into::into).collect(),
+            route_type: value.route_type,
+            route_label: value.route_label,
+            max_sample_rate: value.max_sample_rate,
+        }
+    }
+}
+
+impl From<AudioCapabilityInfo> for AudioCapabilitySnapshot {
+    fn from(value: AudioCapabilityInfo) -> Self {
+        AudioCapabilitySnapshot {
+            capabilities: value.capabilities.into_iter().map(Into::into).collect(),
+            route_type: value.route_type,
+            route_label: value.route_label,
+            max_sample_rate: value.max_sample_rate,
+        }
+        .normalize()
+    }
+}
+
+// ============================================================================
+// API FUNCTIONS
+// ============================================================================
+
+/// Check if native audio is available on this platform.
+pub fn audio_is_native_available() -> bool {
+    // Native audio is now available on all platforms including Android
+    true
+}
+
+/// Initialize the audio engine.
+pub fn audio_init() -> Result<(), String> {
+    crate::assert_android_debug_logging();
+    ENGINE_MANAGER.init();
+    Ok(())
+}
+
+/// Check if the audio engine is initialized.
+pub fn audio_is_initialized() -> bool {
+    ENGINE_MANAGER.is_rust_initialized()
+}
+
+/// Enable or disable high-res mode. When enabled, the Rust engine is allowed
+/// to initialize even if a DAC is not currently detected.
+pub fn audio_set_high_res_mode(enabled: bool) {
+    ENGINE_MANAGER.set_high_res_mode(enabled);
+    #[cfg(all(feature = "uac2", target_os = "android"))]
+    crate::uac2::set_android_direct_usb_enabled(!enabled);
+}
+
+/// Sync the Bit-perfect (DAP Internal) preference from Dart so the Rust engine manager
+/// can factor it into engine selection and reuse decisions.
+/// When toggled at runtime, the running engine's pipeline mode is switched
+/// between Passthrough (bit-perfect) and Dsp (full processing) on DAP devices.
+pub fn audio_set_dap_bit_perfect_enabled(enabled: bool) {
+    ENGINE_MANAGER.set_dap_bit_perfect_enabled(enabled);
+
+    #[cfg(target_os = "android")]
+    {
+        let is_dap = current_device_profile()
+            .as_ref()
+            .is_some_and(|p| p.is_dap());
+        if is_dap {
+            if let Err(e) =
+                with_audio_engine(|handle| handle.set_pipeline_mode_passthrough(enabled))
+            {
+                log::warn!(
+                    "audio_set_dap_bit_perfect_enabled({}): runtime pipeline switch skipped — {}",
+                    enabled,
+                    e
+                );
+            }
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    let _ = enabled;
+}
+
+/// Set the running Rust callback's base pipeline mode.
+///
+/// This is separate from the DAP preference because direct USB playback can
+/// leave the engine in passthrough after bit-perfect is disabled.
+pub fn audio_set_pipeline_mode_passthrough(enabled: bool) -> Result<(), String> {
+    with_audio_engine(|handle| handle.set_pipeline_mode_passthrough(enabled))
+}
+
+/// Sync the preferred Android audio API (AAudio / OpenSL ES / Auto) from Dart.
+/// The change is staged on the engine manager and applied on the next engine
+/// (re)initialization — the live stream is reopened when the preference no
+/// longer matches the value the running engine was built with. On non-Android
+/// targets this is a no-op (cpal has no AudioApi selection).
+pub fn audio_set_audio_api(preference: AudioApiPreference) {
+    ENGINE_MANAGER.set_audio_api_preference(preference);
+}
+
+/// Read the currently-staged Android audio-API preference. Returns the string
+/// key ("auto" / "aaudio" / "opensles") so Dart can mirror UI selection without
+/// importing the generated enum mirror.
+pub fn audio_get_audio_api() -> String {
+    ENGINE_MANAGER.get_audio_api_preference().as_str().to_string()
+}
+
+/// Toggle experimental 432 Hz tuning. When enabled the engine leaves bit-perfect
+/// passthrough, runs the DSP path, and pins playback speed at 432/440.
+pub fn audio_set_432hz_tuning_enabled(enabled: bool) {
+    ENGINE_MANAGER.set_432hz_tuning_enabled(enabled);
+}
+
+/// Set the DSD output mode from Dart. 0 = PCM decimation, 1 = DoP, 2 = Native, 3 = Auto.
+pub fn audio_set_dsd_output_mode(mode: u8) {
+    DSD_OUTPUT_MODE.store(mode.min(3), Ordering::Relaxed);
+}
+
+/// Toggle DSD bit-reverse override. When on, inverts the bit-order normalization
+/// so that MSB-first sources get reversed and LSB-first sources pass through.
+/// Use this to diagnose white-noise from wrong bit order.
+pub fn audio_set_dsd_bit_reverse_override(enabled: bool) {
+    crate::audio::dsd_engine::output::set_dsd_bit_reverse_override(enabled);
+}
+
+/// Wire-packing variant for the DAP-internal native-DSD shim transport:
+/// 0 = Auto/BE-MSB, 1 = LE-MSB, 2 = BE-LSB, 3 = LE-LSB. Wrong = hiss.
+pub fn audio_set_sas_wire_variant(variant: u8) {
+    crate::audio::dsd_sas_shim::set_wire_variant(variant.min(3));
+}
+
+/// Wire byte grouping (subslot width) for the DAP-internal native-DSD shim:
+/// 0 = U32 (legacy), 1 = U16, 2 = U8 (byte-interleaved). Wrong = hiss.
+pub fn audio_set_sas_wire_grouping(grouping: u8) {
+    crate::audio::dsd_sas_shim::set_wire_grouping(grouping);
+}
+
+/// Force the native-DSD wire byte order on the USB direct transport (DSD_U32
+/// packing). Pass `None` to defer to the device quirk (auto). Use to diagnose
+/// channel-swapped or noisy DSD from a wrong byte-order assumption.
+pub fn audio_set_dsd_big_endian_override(value: Option<bool>) {
+    crate::audio::dsd_engine::output::set_dsd_big_endian_override(value);
+}
+
+/// Force the native-DSD subslot size (1=DSD_U8, 2=DSD_U16, 4=DSD_U32) on the
+/// USB direct transport. Pass `None` to defer to the descriptor / device quirk.
+pub fn audio_set_dsd_subslot_override(value: Option<u8>) {
+    crate::audio::dsd_engine::output::set_dsd_subslot_override(value);
+}
+
+/// Update the current platform capability snapshot used for engine selection.
+pub fn audio_set_capability_info(info: AudioCapabilityInfo) {
+    ENGINE_MANAGER.set_capability_snapshot(info.into());
+}
+
+/// Inspect the current capability snapshot after native detection and platform hints are merged.
+pub fn audio_get_capability_info(
+    preferred_sample_rate: Option<u32>,
+) -> Result<AudioCapabilityInfo, String> {
+    ENGINE_MANAGER
+        .capability_snapshot(preferred_sample_rate)
+        .map(Into::into)
+}
+
+/// Return the currently selected engine.
+pub fn audio_get_active_engine() -> String {
+    match ENGINE_MANAGER.current_engine() {
+        Some(AudioEngine::Default) => "default".to_string(),
+        Some(AudioEngine::Rust) => "rust".to_string(),
+        None => "uninitialized".to_string(),
+    }
+}
+
+pub fn audio_get_runtime_debug_state() -> AudioRuntimeDebugState {
+    let manager_engine = audio_get_active_engine();
+    let rust_initialized = audio_is_initialized();
+    let handle_state = read_audio_engine(|handle| {
+        (
+            handle.output_signature().to_string(),
+            handle.sample_rate(),
+            handle.channels(),
+        )
+    });
+
+    AudioRuntimeDebugState {
+        manager_engine,
+        rust_initialized,
+        output_signature: handle_state
+            .as_ref()
+            .map(|(signature, _, _)| signature.clone()),
+        sample_rate: handle_state
+            .as_ref()
+            .map(|(_, sample_rate, _)| *sample_rate),
+        channels: handle_state.as_ref().map(|(_, _, channels)| *channels),
+    }
+}
+
+pub fn audio_get_runtime_debug_json_state() -> AudioRuntimeDebugJsonState {
+    let base = audio_get_runtime_debug_state();
+    let output_runtime = read_audio_engine(|handle| handle.output_runtime().clone());
+
+    AudioRuntimeDebugJsonState {
+        manager_engine: base.manager_engine,
+        rust_initialized: base.rust_initialized,
+        output_signature: base.output_signature,
+        sample_rate: base.sample_rate,
+        channels: base.channels,
+        output_strategy: output_runtime.as_ref().map(|state| state.strategy.clone()),
+        requested_sample_rate: output_runtime
+            .as_ref()
+            .map(|state| state.requested_sample_rate),
+        actual_sample_rate: output_runtime
+            .as_ref()
+            .map(|state| state.actual_sample_rate),
+        resampler_active: output_runtime.as_ref().map(|state| state.resampler_active),
+        passthrough_allowed: output_runtime
+            .as_ref()
+            .map(|state| state.passthrough_allowed),
+        verification_reason: output_runtime
+            .as_ref()
+            .and_then(|state| state.verification_reason.clone()),
+        direct_usb_active: output_runtime.as_ref().map(|state| state.direct_usb_active),
+        direct_usb_verified: output_runtime
+            .as_ref()
+            .map(|state| state.direct_usb_verified),
+        dsd_source_rate: output_runtime
+            .as_ref()
+            .and_then(|state| state.dsd_source_rate),
+        dsd_effective_mode: output_runtime
+            .as_ref()
+            .and_then(|state| state.dsd_effective_mode.clone()),
+        dsd_wire_rate: output_runtime
+            .as_ref()
+            .and_then(|state| state.dsd_wire_rate),
+        dsd_transport: output_runtime
+            .as_ref()
+            .and_then(|state| state.dsd_transport.clone()),
+        active_audio_api: output_runtime
+            .as_ref()
+            .and_then(|state| state.active_audio_api.clone()),
+    }
+}
+
+/// Callback starvation counters for the Android diagnostics JSON only.
+pub(crate) fn dsd_callback_debug_json() -> serde_json::Value {
+    let stats = read_audio_engine(|handle| handle.dsd_starve_stats());
+    serde_json::json!({
+        "starved_samples": stats.map(|(samples, _)| samples),
+        "lock_misses": stats.map(|(_, misses)| misses),
+    })
+}
+
+/// Managed-output burst telemetry for the Android diagnostics JSON only.
+/// Distinguishes device-provided callback sizes from app-side scratch
+/// capacity so oversized Bluetooth bursts are visible in logs.
+pub(crate) fn managed_output_debug_json() -> serde_json::Value {
+    #[cfg(target_os = "android")]
+    let scratch_frames = crate::audio::engine::ANDROID_DIRECT_SCRATCH_FRAMES;
+    #[cfg(not(target_os = "android"))]
+    let scratch_frames = 0usize;
+
+    let stats = read_audio_engine(|handle| handle.managed_output_stats());
+    serde_json::json!({
+        "burst_frames_max": stats.map(|(frames, _)| frames),
+        "burst_chunked_count": stats.map(|(_, chunks)| chunks),
+        "scratch_frames": scratch_frames,
+    })
+}
+
+/// Detect whether a DAC is present before attempting Rust engine initialization.
+pub fn audio_is_dac_available(preferred_sample_rate: Option<u32>) -> Result<bool, String> {
+    ENGINE_MANAGER.is_dac_available(preferred_sample_rate)
+}
+
+/// Prepare the Rust audio engine for the requested output rate before playback starts.
+pub fn audio_prepare_engine(preferred_sample_rate: Option<u32>) -> Result<(), String> {
+    ensure_audio_engine(resolve_requested_output_sample_rate(preferred_sample_rate)?)
+}
+
+/// discover the actual sample rate before the USB engine is configured. Used by
+/// Dart when song metadata lacks sampleRate/bitDepth, to avoid falling back to
+/// just_audio and to avoid configuring the USB DAC clock at the wrong rate.
+pub struct AudioProbeFormat {
+    pub sample_rate: u32,
+    pub channels: u16,
+    pub bits_per_sample: Option<u32>,
+}
+
+pub fn audio_probe_format(path: String) -> Result<AudioProbeFormat, String> {
+    use symphonia::core::codecs::audio::CODEC_ID_NULL_AUDIO;
+    use symphonia::core::codecs::CodecParameters;
+    use symphonia::core::formats::probe::Hint;
+    use symphonia::core::formats::FormatOptions;
+    use symphonia::core::io::MediaSourceStream;
+    use symphonia::core::meta::MetadataOptions;
+    use std::fs::File;
+    use std::path::Path;
+
+    let path_obj = Path::new(&path);
+    let file = File::open(path_obj).map_err(|e| format!("Failed to open file: {}", e))?;
+    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    let mut hint = Hint::new();
+    if let Some(ext) = path_obj.extension().and_then(|e| e.to_str()) {
+        hint.with_extension(ext);
+    }
+    let probed = symphonia::default::get_probe()
+        .probe(
+            &hint,
+            mss,
+            FormatOptions::default(),
+            MetadataOptions::default(),
+        )
+        .map_err(|e| format!("Failed to probe format: {}", e))?;
+    let track = probed
+        .tracks()
+        .iter()
+        .find(|t| {
+            matches!(
+                &t.codec_params,
+                Some(CodecParameters::Audio(p)) if p.codec != CODEC_ID_NULL_AUDIO
+            )
+        })
+        .ok_or("No audio track found".to_string())?;
+    let cp = track
+        .codec_params
+        .as_ref()
+        .and_then(|p| p.audio())
+        .ok_or("No audio track found".to_string())?;
+    Ok(AudioProbeFormat {
+        sample_rate: cp.sample_rate.unwrap_or(44100),
+        channels: cp
+            .channels
+            .as_ref()
+            .map(|c| c.count() as u16)
+            .unwrap_or(2),
+        bits_per_sample: cp.bits_per_sample,
+    })
+}
+
+fn playback_range_for_path(
+    path: &std::path::Path,
+    start_secs: Option<f64>,
+    end_secs: Option<f64>,
+) -> Result<PlaybackRange, String> {
+    let range = PlaybackRange {
+        start_secs: start_secs.unwrap_or(0.0),
+        end_secs,
+    }
+    .validate()?;
+    if range != PlaybackRange::default()
+        && !matches!(
+            detect_file_type(path),
+            crate::audio::decoder_handle::FileType::Standard
+        )
+    {
+        return Err("CUE playback ranges are not supported for DSD/WavPack sources".to_string());
+    }
+    Ok(range)
+}
+
+/// Play an audio file, optionally restricted to a CUE track.
+pub fn audio_play(
+    path: String,
+    start_secs: Option<f64>,
+    end_secs: Option<f64>,
+) -> Result<(), String> {
+    crate::assert_android_debug_logging();
+    let path = PathBuf::from(&path);
+    let range = playback_range_for_path(&path, start_secs, end_secs)?;
+    match detect_file_type(&path) {
+        crate::audio::decoder_handle::FileType::Dsd => {
+            let requested_mode = current_dsd_output_mode();
+            let (dsd_sample_rate, dsd_source_channels) = {
+                let decoder = open_dsd_decoder(&path)
+                    .map_err(|e| format!("Failed to probe DSD rate: {}", e))?;
+                (decoder.sample_rate(), decoder.channels())
+            };
+            let dsd_rate_enum = DsdRate::from_sample_rate(dsd_sample_rate);
+            set_dsd_track_rate(dsd_sample_rate);
+            set_dsd_source_channels(dsd_source_channels);
+            clear_dsd_native_failure();
+            let mut effective_mode = effective_dsd_output_mode_for_rate_and_channels(
+                requested_mode,
+                dsd_rate_enum,
+                Some(dsd_source_channels),
+            );
+            log_info!(
+                "[AUDIO] DSD play: requested={:?} dsd_rate={} channels={} effective={:?}",
+                requested_mode,
+                dsd_sample_rate,
+                dsd_source_channels,
+                effective_mode
+            );
+            if matches!(effective_mode, DsdOutputMode::Native | DsdOutputMode::Auto) {
+                crate::audio::dsd_native_jni::dsd_track_preload_class();
+            }
+            if let Err(e) =
+                ensure_audio_engine(resolve_dsd_engine_sample_rate(&path, effective_mode)?)
+            {
+                if e.starts_with("DSD_NATIVE_FALLBACK:") {
+                    record_dsd_native_failure(&e);
+                    log::info!(
+                        "[AUDIO] DSD Native unavailable ({}), falling back to DoP",
+                        e
+                    );
+                    effective_mode = DsdOutputMode::Dop;
+                    ensure_audio_engine_excluded(
+                        resolve_dsd_engine_sample_rate(&path, effective_mode)?,
+                        vec![OutputStrategy::DsdNative],
+                    )?;
+                } else {
+                    return Err(e);
+                }
+            }
+            let (mut output_sample_rate, mut output_channels) =
+                with_audio_engine(|handle| Ok((handle.sample_rate(), handle.channels())))?;
+            verify_dsd_engine_rate(&path, effective_mode, output_sample_rate)?;
+            if effective_mode == DsdOutputMode::Dop {
+                if let Err(dop_err) = verify_dop_passthrough(output_sample_rate) {
+                    // Hard-fail only when a direct USB session is actually
+                    // carrying the stream; Android-managed/DAP routes
+                    // degrade to PCM decimation below.
+                    #[cfg(all(feature = "uac2", target_os = "android"))]
+                    if read_audio_engine(|handle| handle.output_runtime().direct_usb_active)
+                        .unwrap_or(false)
+                    {
+                        return Err(dop_err);
+                    }
+                    log::info!(
+                        "[AUDIO] DoP pre-flight failed ({}), degrading to PCM decimation",
+                        dop_err
+                    );
+                    effective_mode = DsdOutputMode::PcmDecimation;
+                    let pcm_rate = {
+                        let decoder = open_dsd_decoder(&path)
+                            .map_err(|e| format!("Failed to probe DSD rate: {}", e))?;
+                        let dsd_rate = DsdRate::from_sample_rate(decoder.sample_rate())
+                            .ok_or_else(|| format!("Unsupported DSD rate"))?;
+                        resolve_dsd_pcm_sample_rate(dsd_rate, 0)
+                    };
+                    // DsdDoP must be excluded so the manager cannot reuse
+                    // (or recreate) the DoP-configured engine.
+                    ensure_audio_engine_excluded(
+                        resolve_requested_output_sample_rate(Some(pcm_rate))?,
+                        vec![OutputStrategy::DsdNative, OutputStrategy::DsdDoP],
+                    )?;
+                    output_sample_rate = with_audio_engine(|handle| Ok(handle.sample_rate()))?;
+                    output_channels = with_audio_engine(|handle| Ok(handle.channels()))?;
+                }
+            }
+            let (source, thread) =
+                DsdDecoderThread::spawn(path, effective_mode, output_sample_rate, output_channels)
+                    .map_err(|e| format!("Failed to decode DSD: {}", e))?;
+            let is_raw = matches!(effective_mode, DsdOutputMode::Dop | DsdOutputMode::Native);
+            with_audio_engine(|handle| {
+                handle.set_dop_override(is_raw)?;
+                handle.play_prepared(source, DecoderHandle::Dsd(thread))
+            })
+        }
+        crate::audio::decoder_handle::FileType::WavPack => {
+            clear_dsd_track_rate();
+            ensure_audio_engine(resolve_track_playback_output_sample_rate(
+                crate::audio::wavpack_thread::wavpack_pcm_sample_rate(&path),
+            )?)?;
+            let (output_sample_rate, output_channels) =
+                with_audio_engine(|handle| Ok((handle.sample_rate(), handle.channels())))?;
+            let (source, handle) =
+                WavpackDecoderThread::spawn(path, output_sample_rate, output_channels)
+                    .map_err(|e| format!("Failed to decode WavPack: {}", e))?;
+            with_audio_engine(|engine| {
+                engine.set_dop_override(false)?;
+                engine.play_prepared(source, handle)
+            })
+        }
+        crate::audio::decoder_handle::FileType::Standard => {
+            clear_dsd_track_rate();
+            let probe_result = probe_file(path.as_path())
+                .map_err(|error| format!("Failed to probe {}: {}", path.display(), error))?;
+            ensure_audio_engine(resolve_track_playback_output_sample_rate(Some(
+                probe_result.source_info.original_sample_rate,
+            ))?)?;
+            let (output_sample_rate, output_channels) =
+                with_audio_engine(|handle| Ok((handle.sample_rate(), handle.channels())))?;
+            let file_rate = probe_result.source_info.original_sample_rate;
+            if output_sample_rate != file_rate {
+                log_warn!(
+                    "[AUDIO] engine_sample_rate_hz={} decoded_file_sample_rate_hz={} — decoder resampling active",
+                    output_sample_rate,
+                    file_rate
+                );
+            } else {
+                log_info!(
+                    "[AUDIO] engine_sample_rate_hz matches decoded_file_sample_rate_hz ({} Hz); decoder resampling off",
+                    file_rate
+                );
+            }
+            let (source, decoder_thread) = DecoderThread::spawn_from_probe_result(
+                probe_result,
+                output_sample_rate,
+                output_channels,
+                None,
+                range,
+            )
+            .map_err(|error| format!("Failed to decode {}: {}", path.display(), error))?;
+            with_audio_engine(|handle| {
+                handle.set_dop_override(false)?;
+                handle.play_prepared(source, DecoderHandle::Symphonia(decoder_thread))
+            })
+        }
+    }
+}
+
+/// Queue the next track for gapless playback.
+pub fn audio_queue_next(
+    path: String,
+    start_secs: Option<f64>,
+    end_secs: Option<f64>,
+) -> Result<(), String> {
+    crate::assert_android_debug_logging();
+    let path = PathBuf::from(path);
+    let range = playback_range_for_path(&path, start_secs, end_secs)?;
+    if !audio_is_initialized() {
+        match detect_file_type(&path) {
+            crate::audio::decoder_handle::FileType::Dsd => {
+                let requested_mode = current_dsd_output_mode();
+                let (dsd_sample_rate, dsd_source_channels) = {
+                    let decoder = open_dsd_decoder(&path)
+                        .map_err(|e| format!("Failed to probe DSD rate: {}", e))?;
+                    (decoder.sample_rate(), decoder.channels())
+                };
+                let dsd_rate_enum = DsdRate::from_sample_rate(dsd_sample_rate);
+                set_dsd_track_rate(dsd_sample_rate);
+                set_dsd_source_channels(dsd_source_channels);
+                clear_dsd_native_failure();
+                let mut effective_mode = effective_dsd_output_mode_for_rate_and_channels(
+                    requested_mode,
+                    dsd_rate_enum,
+                    Some(dsd_source_channels),
+                );
+                log_info!(
+                    "[AUDIO] DSD queue_next: requested={:?} dsd_rate={} channels={} effective={:?}",
+                    requested_mode,
+                    dsd_sample_rate,
+                    dsd_source_channels,
+                    effective_mode
+                );
+                if matches!(effective_mode, DsdOutputMode::Native | DsdOutputMode::Auto) {
+                    crate::audio::dsd_native_jni::dsd_track_preload_class();
+                }
+                if let Err(e) =
+                    ensure_audio_engine(resolve_dsd_engine_sample_rate(&path, effective_mode)?)
+                {
+                    if e.starts_with("DSD_NATIVE_FALLBACK:") {
+                        record_dsd_native_failure(&e);
+                        log::info!(
+                            "[AUDIO] DSD Native unavailable ({}), falling back to DoP",
+                            e
+                        );
+                        effective_mode = DsdOutputMode::Dop;
+                        ensure_audio_engine_excluded(
+                            resolve_dsd_engine_sample_rate(&path, effective_mode)?,
+                            vec![OutputStrategy::DsdNative],
+                        )?;
+                    } else {
+                        return Err(e);
+                    }
+                }
+                let (mut output_sample_rate, mut output_channels) =
+                    with_audio_engine(|handle| Ok((handle.sample_rate(), handle.channels())))?;
+                verify_dsd_engine_rate(&path, effective_mode, output_sample_rate)?;
+                if effective_mode == DsdOutputMode::Dop {
+                    if let Err(dop_err) = verify_dop_passthrough(output_sample_rate) {
+                        // Hard-fail only when a direct USB session is actually
+                        // carrying the stream; Android-managed/DAP routes
+                        // degrade to PCM decimation below.
+                        #[cfg(all(feature = "uac2", target_os = "android"))]
+                        if read_audio_engine(|handle| handle.output_runtime().direct_usb_active)
+                            .unwrap_or(false)
+                        {
+                            return Err(dop_err);
+                        }
+                        log::info!(
+                            "[AUDIO] DoP pre-flight failed ({}), degrading to PCM decimation",
+                            dop_err
+                        );
+                        effective_mode = DsdOutputMode::PcmDecimation;
+                        let pcm_rate = {
+                            let decoder = open_dsd_decoder(&path)
+                                .map_err(|e| format!("Failed to probe DSD rate: {}", e))?;
+                            let dsd_rate = DsdRate::from_sample_rate(decoder.sample_rate())
+                                .ok_or_else(|| format!("Unsupported DSD rate"))?;
+                            resolve_dsd_pcm_sample_rate(dsd_rate, 0)
+                        };
+                        // DsdDoP must be excluded so the manager cannot reuse
+                        // (or recreate) the DoP-configured engine.
+                        ensure_audio_engine_excluded(
+                            resolve_requested_output_sample_rate(Some(pcm_rate))?,
+                            vec![OutputStrategy::DsdNative, OutputStrategy::DsdDoP],
+                        )?;
+                        output_sample_rate = with_audio_engine(|handle| Ok(handle.sample_rate()))?;
+                        output_channels = with_audio_engine(|handle| Ok(handle.channels()))?;
+                    }
+                }
+                let (source, thread) = DsdDecoderThread::spawn(
+                    path,
+                    effective_mode,
+                    output_sample_rate,
+                    output_channels,
+                )
+                .map_err(|e| format!("Failed to decode DSD: {}", e))?;
+                let is_raw = matches!(effective_mode, DsdOutputMode::Dop | DsdOutputMode::Native);
+                return with_audio_engine(|handle| {
+                    handle.set_dop_override(is_raw)?;
+                    handle.queue_next_prepared(source, DecoderHandle::Dsd(thread))
+                });
+            }
+            crate::audio::decoder_handle::FileType::WavPack => {
+                clear_dsd_track_rate();
+                ensure_audio_engine(resolve_track_playback_output_sample_rate(
+                    crate::audio::wavpack_thread::wavpack_pcm_sample_rate(&path),
+                )?)?;
+                let (output_sample_rate, output_channels) =
+                    with_audio_engine(|handle| Ok((handle.sample_rate(), handle.channels())))?;
+                let (source, wh) =
+                    WavpackDecoderThread::spawn(path, output_sample_rate, output_channels)
+                        .map_err(|e| format!("Failed to decode WavPack: {}", e))?;
+                return with_audio_engine(|engine| {
+                    engine.set_dop_override(false)?;
+                    engine.queue_next_prepared(source, wh)
+                });
+            }
+            crate::audio::decoder_handle::FileType::Standard => {
+                clear_dsd_track_rate();
+                let probe_result = probe_file(path.as_path())
+                    .map_err(|error| format!("Failed to probe {}: {}", path.display(), error))?;
+                ensure_audio_engine(resolve_track_playback_output_sample_rate(Some(
+                    probe_result.source_info.original_sample_rate,
+                ))?)?;
+                let (output_sample_rate, output_channels) =
+                    with_audio_engine(|handle| Ok((handle.sample_rate(), handle.channels())))?;
+                let file_rate = probe_result.source_info.original_sample_rate;
+                if output_sample_rate != file_rate {
+                    log_warn!(
+                        "[AUDIO] engine_sample_rate_hz={} decoded_file_sample_rate_hz={} — decoder resampling active",
+                        output_sample_rate,
+                        file_rate
+                    );
+                } else {
+                    log_info!(
+                        "[AUDIO] engine_sample_rate_hz matches decoded_file_sample_rate_hz ({} Hz); decoder resampling off",
+                        file_rate
+                    );
+                }
+                let (source, decoder_thread) = DecoderThread::spawn_from_probe_result(
+                    probe_result,
+                    output_sample_rate,
+                    output_channels,
+                    None,
+                    range,
+                )
+                .map_err(|error| format!("Failed to decode {}: {}", path.display(), error))?;
+                return with_audio_engine(|handle| {
+                    handle.set_dop_override(false)?;
+                    handle.queue_next_prepared(source, DecoderHandle::Symphonia(decoder_thread))
+                });
+            }
+        }
+    }
+
+    let (output_sample_rate, output_channels, engine_is_raw) =
+        with_audio_engine(|handle| Ok((handle.sample_rate(), handle.channels(), handle.is_dop())))?;
+    let plan = plan_track_engine_config(&path)?;
+    match decide_queue_plan(
+        output_sample_rate,
+        engine_is_raw,
+        &plan,
+        CROSSFADE_PINS_OUTPUT_RATE.load(Ordering::Relaxed),
+    ) {
+        QueuePlanDecision::Compatible => {}
+        QueuePlanDecision::PinResampleToEngineRate => {
+            log_info!(
+                "[AUDIO] queue_next: crossfade pin — {} is {} Hz, engine runs {} Hz; \
+                 decoding at the engine rate (resampled) so the boundary can crossfade",
+                path.display(),
+                plan.sample_rate,
+                output_sample_rate
+            );
+        }
+        QueuePlanDecision::Skip => {
+            log_info!(
+                "[AUDIO] queue_next: skipping {} — needs {} Hz raw_dsd={}, engine runs {} Hz raw_dsd={}; \
+                 the track-ended fallback will renegotiate the output",
+                path.display(),
+                plan.sample_rate,
+                plan.is_raw,
+                output_sample_rate,
+                engine_is_raw
+            );
+            return Ok(());
+        }
+    }
+    let (source, handle) = prepare_decoder_source(
+        &path,
+        plan.dsd_mode,
+        output_sample_rate,
+        output_channels,
+        range,
+    )?;
+    with_audio_engine(|engine| {
+        engine.set_dop_override(plan.is_raw)?;
+        engine.queue_next_prepared(source, handle)
+    })
+}
+
+/// Play a remote audio stream over HTTP. Range-support is assumed (caller
+/// verifies `Accept-Ranges: bytes`); PCM only, no DSD/WavPack over HTTP.
+/// Auth is carried via `headers` (e.g. WebDAV Basic) — Subsonic/Jellyfin embed
+/// credentials in the URL query and pass an empty header map.
+pub fn audio_play_from_http(
+    url: String,
+    headers: HashMap<String, String>,
+    start_secs: Option<f64>,
+    end_secs: Option<f64>,
+) -> Result<(), String> {
+    let range = PlaybackRange {
+        start_secs: start_secs.unwrap_or(0.0),
+        end_secs,
+    }
+    .validate()?;
+    clear_dsd_track_rate();
+    let probe_result = probe_http(&url, headers)
+        .map_err(|e| format!("Failed to probe HTTP stream: {}", e))?;
+    let file_rate = probe_result.source_info.original_sample_rate;
+    ensure_audio_engine(resolve_track_playback_output_sample_rate(Some(file_rate))?)?;
+    let (output_sample_rate, output_channels) =
+        with_audio_engine(|handle| Ok((handle.sample_rate(), handle.channels())))?;
+    if output_sample_rate != file_rate {
+        log_warn!(
+            "[AUDIO] http: engine_sample_rate_hz={} stream_sample_rate_hz={} — decoder resampling active",
+            output_sample_rate,
+            file_rate
+        );
+    }
+    let (source, decoder_thread) = DecoderThread::spawn_from_probe_result(
+        probe_result,
+        output_sample_rate,
+        output_channels,
+        None,
+        range,
+    )
+    .map_err(|e| format!("Failed to decode HTTP stream: {}", e))?;
+    with_audio_engine(|handle| {
+        handle.set_dop_override(false)?;
+        handle.play_prepared(source, DecoderHandle::Symphonia(decoder_thread))
+    })
+}
+
+/// Queue a remote HTTP stream as the next track for gapless playback.
+pub fn audio_queue_next_from_http(
+    url: String,
+    headers: HashMap<String, String>,
+    start_secs: Option<f64>,
+    end_secs: Option<f64>,
+) -> Result<(), String> {
+    let range = PlaybackRange {
+        start_secs: start_secs.unwrap_or(0.0),
+        end_secs,
+    }
+    .validate()?;
+    if !audio_is_initialized() {
+        clear_dsd_track_rate();
+        let probe_result = probe_http(&url, headers)
+            .map_err(|e| format!("Failed to probe HTTP stream: {}", e))?;
+        let file_rate = probe_result.source_info.original_sample_rate;
+        ensure_audio_engine(resolve_track_playback_output_sample_rate(Some(file_rate))?)?;
+        let (output_sample_rate, output_channels) =
+            with_audio_engine(|handle| Ok((handle.sample_rate(), handle.channels())))?;
+        let (source, decoder_thread) = DecoderThread::spawn_from_probe_result(
+            probe_result,
+            output_sample_rate,
+            output_channels,
+            None,
+            range,
+        )
+        .map_err(|e| format!("Failed to decode HTTP stream: {}", e))?;
+        return with_audio_engine(|handle| {
+            handle.set_dop_override(false)?;
+            handle.queue_next_prepared(source, DecoderHandle::Symphonia(decoder_thread))
+        });
+    }
+
+    // Engine already live at a fixed rate: probe and only queue when the
+    // stream needs the same clock/pipeline. A rate change or a raw-DSD
+    // engine cannot be reused gaplessly — let the track-ended fallback
+    // renegotiate instead of resampling the stream into the old config.
+    let probe_result =
+        probe_http(&url, headers).map_err(|e| format!("Failed to probe HTTP stream: {}", e))?;
+    let planned_rate = resolve_track_playback_output_sample_rate(Some(
+        probe_result.source_info.original_sample_rate,
+    ))?
+    .unwrap_or(DEFAULT_ENGINE_SAMPLE_RATE);
+    let (output_sample_rate, output_channels, engine_is_raw) =
+        with_audio_engine(|handle| Ok((handle.sample_rate(), handle.channels(), handle.is_dop())))?;
+    let crossfade_pin = CROSSFADE_PINS_OUTPUT_RATE.load(Ordering::Relaxed);
+    if engine_is_raw || (planned_rate != output_sample_rate && !crossfade_pin) {
+        log_info!(
+            "[AUDIO] queue_next(http): skipping {} — needs {} Hz, engine runs {} Hz raw_dsd={}; \
+             the track-ended fallback will renegotiate the output",
+            url,
+            planned_rate,
+            output_sample_rate,
+            engine_is_raw
+        );
+        return Ok(());
+    }
+    if planned_rate != output_sample_rate {
+        log_info!(
+            "[AUDIO] queue_next(http): crossfade pin — {} is {} Hz, engine runs {} Hz; \
+             decoding at the engine rate (resampled) so the boundary can crossfade",
+            url,
+            planned_rate,
+            output_sample_rate
+        );
+    }
+    let (source, decoder_thread) = DecoderThread::spawn_from_probe_result(
+        probe_result,
+        output_sample_rate,
+        output_channels,
+        None,
+        range,
+    )
+    .map_err(|e| format!("Failed to decode HTTP stream: {}", e))?;
+    with_audio_engine(|handle| {
+        handle.set_dop_override(false)?;
+        handle.queue_next_prepared(source, DecoderHandle::Symphonia(decoder_thread))
+    })
+}
+
+/// Pause playback.
+pub fn audio_pause() -> Result<(), String> {
+    with_audio_engine(|handle| handle.pause())
+}
+
+/// Resume playback after pause.
+pub fn audio_resume() -> Result<(), String> {
+    with_audio_engine(|handle| handle.resume())
+}
+
+/// Stop playback completely.
+pub fn audio_stop() -> Result<(), String> {
+    clear_dsd_track_rate();
+    with_audio_engine(|handle| handle.stop())
+}
+
+/// Seek to a position in the current track.
+pub fn audio_seek(position_secs: f64) -> Result<(), String> {
+    with_audio_engine(|handle| handle.seek(position_secs))
+}
+
+/// Set the playback volume.
+pub fn audio_set_volume(volume: f32) -> Result<(), String> {
+    let clamped = volume.clamp(0.0, crate::audio::engine::MAX_VOLUME);
+    set_pending_volume(clamped);
+    let _ = with_audio_engine(|handle| handle.set_volume(clamped));
+    Ok(())
+}
+
+/// Set the effective ReplayGain (dB) for the current track and as the default
+/// for subsequently spawned sources (next track, seek re-spawn). 0.0 = off.
+///
+/// Callers compute the final value — mode gain (track/album) + preamp +
+/// clipping-prevention reduction — before calling. The engine applies it as a
+/// per-source linear gain; a non-zero value forces the DSP path.
+pub fn audio_set_replaygain(gain_db: f32) -> Result<(), String> {
+    let clamped = gain_db.clamp(-60.0, 30.0);
+    with_audio_engine(|handle| handle.set_replaygain(clamped))
+}
+
+/// Set only the spawn-time default ReplayGain (dB): the running source keeps
+/// its own gain while currently-playing. Used when pre-queueing the next
+/// gapless track, whose gain is stamped on the newly spawned source.
+pub fn audio_set_replaygain_default(gain_db: f32) -> Result<(), String> {
+    let clamped = gain_db.clamp(-60.0, 30.0);
+    with_audio_engine(|handle| handle.set_replaygain_default(clamped))
+}
+
+/// Set EQ: enabled, broadband preamp (dB) and a variable list of band specs
+/// (real per-type biquads, up to 31 bands). Graphic mode is expressed as 10
+/// peaking specs.
+pub fn audio_set_equalizer(
+    enabled: bool,
+    preamp_db: f32,
+    specs: Vec<EqBandSpec>,
+) -> Result<(), String> {
+    set_pending_equalizer(enabled, preamp_db, specs.clone());
+    with_audio_engine(|handle| handle.set_equalizer(enabled, preamp_db, specs))
+}
+
+/// Set BS2B crossfeed level for the native audio engine.
+/// 0 = Off, 1 = Default (BS2B middle preset), 2 = Crossfeed (high),
+/// 3 = Crossfeed easy (gentle). 0 fully bypasses processing.
+pub fn audio_set_crossfeed(level: u8) -> Result<(), String> {
+    set_pending_crossfeed(level);
+    with_audio_engine(|handle| handle.set_crossfeed(CrossfeedLevel::from_u8(level)))
+}
+
+/// Set pitch shift in semitones for the native audio engine (tempo preserved).
+/// 0 = bypass. Range is clamped internally to ±12 semitones.
+pub fn audio_set_pitch_shift_semitones(semitones: f32) -> Result<(), String> {
+    log::info!("[PITCH] FFI audio_set_pitch_shift_semitones({semitones})");
+    with_audio_engine(|handle| handle.set_pitch_shift(semitones))
+}
+
+/// Configure compressor settings for the native audio engine.
+pub fn audio_set_compressor(
+    enabled: bool,
+    threshold_db: f32,
+    ratio: f32,
+    attack_ms: f32,
+    release_ms: f32,
+    makeup_gain_db: f32,
+) -> Result<(), String> {
+    with_audio_engine(|handle| {
+        handle.set_compressor(
+            enabled,
+            threshold_db,
+            ratio,
+            attack_ms,
+            release_ms,
+            makeup_gain_db,
+        )
+    })
+}
+
+/// Configure limiter settings for the native audio engine.
+pub fn audio_set_limiter(
+    enabled: bool,
+    input_gain_db: f32,
+    ceiling_db: f32,
+    release_ms: f32,
+) -> Result<(), String> {
+    with_audio_engine(|handle| handle.set_limiter(enabled, input_gain_db, ceiling_db, release_ms))
+}
+
+/// Configure spatial/time FX settings for the native audio engine.
+#[allow(clippy::too_many_arguments)]
+pub fn audio_set_fx(
+    enabled: bool,
+    balance: f32,
+    tempo: f32,
+    damp: f32,
+    filter_hz: f32,
+    delay_ms: f32,
+    size: f32,
+    mix: f32,
+    feedback: f32,
+    width: f32,
+) -> Result<(), String> {
+    with_audio_engine(|handle| {
+        handle.set_fx(
+            enabled, balance, tempo, damp, filter_hz, delay_ms, size, mix, feedback, width,
+        )
+    })
+}
+
+/// Enable/disable the impulse-response convolver and set its wet/dry mix
+/// (0.0 = dry, 1.0 = full IR).
+pub fn audio_set_convolver(enabled: bool, mix: f32) -> Result<(), String> {
+    with_audio_engine(|handle| handle.set_convolver(enabled, mix))
+}
+
+/// Decode an impulse-response file, resample it to the engine rate and load it
+/// into the convolver. Decoding runs on this thread (not the audio callback);
+/// a failure leaves the previously-loaded IR untouched.
+pub fn audio_load_ir(path: String) -> Result<(), String> {
+    let rate = with_audio_engine(|handle| Ok(handle.sample_rate()))?;
+    let coeffs = crate::audio::ir_loader::load_ir(std::path::Path::new(&path), rate)?;
+    with_audio_engine(|handle| handle.set_convolver_ir(coeffs))
+}
+
+/// Drop any loaded IR and disable the convolver.
+pub fn audio_clear_ir() -> Result<(), String> {
+    with_audio_engine(|handle| handle.send_command(crate::audio::commands::AudioCommand::ClearConvolverIr))
+}
+
+/// Configure crossfade settings.
+///
+/// The engine's own `is_crossfade_allowed()` trigger gate (plus the Dart-side
+/// processing policy) authoritatively decide whether crossfade runs; the old
+/// passthrough guard here was redundant and self-defeating — it blocked the
+/// very `crossfade_forces_dsp` flip that lets crossfade escape passthrough.
+pub fn audio_set_crossfade(enabled: bool, duration_secs: f32) -> Result<(), String> {
+    // While crossfade is on, keep the output clock pinned to the rate of the
+    // track that started playback so mismatched-rate successors can still be
+    // queued and faded; explicit plays still renegotiate to the native rate.
+    CROSSFADE_PINS_OUTPUT_RATE.store(enabled, Ordering::Relaxed);
+    set_pending_crossfade(enabled, duration_secs);
+    with_audio_engine(|handle| handle.set_crossfade(enabled, duration_secs))
+}
+
+/// Skip to the next queued track.
+pub fn audio_skip_to_next() -> Result<(), String> {
+    with_audio_engine(|handle| handle.skip_to_next())
+}
+
+/// Set the playback speed.
+pub fn audio_set_playback_speed(speed: f32) -> Result<(), String> {
+    with_audio_engine(|handle| handle.set_playback_speed(speed))
+}
+
+/// Get the current playback speed.
+pub fn audio_get_playback_speed() -> Option<f32> {
+    read_audio_engine(|handle| handle.get_playback_speed())
+}
+
+/// Get the current playback state.
+pub fn audio_get_state() -> String {
+    let Some(handle_state) = read_audio_engine(|handle| handle.state()) else {
+        return "uninitialized".to_string();
+    };
+    match handle_state {
+        PlaybackState::Idle => "idle".to_string(),
+        PlaybackState::Playing => "playing".to_string(),
+        PlaybackState::Paused => "paused".to_string(),
+        PlaybackState::Buffering => "buffering".to_string(),
+        PlaybackState::Crossfading => "crossfading".to_string(),
+        PlaybackState::Stopped => "stopped".to_string(),
+    }
+}
+
+/// Get the current playback progress.
+pub fn audio_get_progress() -> Option<AudioProgress> {
+    read_audio_engine(|handle| handle.get_progress())
+        .flatten()
+        .map(|p| AudioProgress {
+            position_secs: p.position_secs,
+            duration_secs: p.duration_secs,
+            buffer_level: p.buffer_level,
+        })
+}
+
+/// Poll for audio events (non-blocking).
+pub fn audio_poll_event() -> Option<AudioEventType> {
+    let event = read_audio_engine(|handle| handle.try_recv_event()).flatten()?;
+    Some(match event {
+        AudioEvent::StateChanged(state) => AudioEventType::StateChanged {
+            state: match state {
+                PlaybackState::Idle => "idle".to_string(),
+                PlaybackState::Playing => "playing".to_string(),
+                PlaybackState::Paused => "paused".to_string(),
+                PlaybackState::Buffering => "buffering".to_string(),
+                PlaybackState::Crossfading => "crossfading".to_string(),
+                PlaybackState::Stopped => "stopped".to_string(),
+            },
+        },
+        AudioEvent::Progress(p) => AudioEventType::Progress {
+            position_secs: p.position_secs,
+            duration_secs: p.duration_secs,
+            buffer_level: p.buffer_level,
+        },
+        AudioEvent::TrackEnded { source } => AudioEventType::TrackEnded { source },
+        AudioEvent::CrossfadeStarted { from, to } => AudioEventType::CrossfadeStarted { from, to },
+        AudioEvent::Error { message } => AudioEventType::Error { message },
+        AudioEvent::NextTrackReady { source } => AudioEventType::NextTrackReady { source },
+    })
+}
+
+/// Set the crossfade curve type.
+pub fn audio_set_crossfade_curve(curve: CrossfadeCurveType) -> Result<(), String> {
+    let curve = match curve {
+        CrossfadeCurveType::EqualPower => crate::audio::crossfader::CrossfadeCurve::EqualPower,
+        CrossfadeCurveType::Linear => crate::audio::crossfader::CrossfadeCurve::Linear,
+        CrossfadeCurveType::SquareRoot => crate::audio::crossfader::CrossfadeCurve::SquareRoot,
+        CrossfadeCurveType::SCurve => crate::audio::crossfader::CrossfadeCurve::SCurve,
+    };
+    set_pending_crossfade_curve(curve);
+    with_audio_engine(|handle| handle.set_crossfade_curve(curve))
+}
+
+/// Get the audio engine's sample rate.
+pub fn audio_get_sample_rate() -> Option<u32> {
+    read_audio_engine(|handle| handle.sample_rate())
+}
+
+/// Get the current track path.
+pub fn audio_get_current_path() -> Option<String> {
+    read_audio_engine(|handle| handle.get_current_path())
+        .flatten()
+        .map(|p| p.to_string_lossy().to_string())
+}
+
+/// Current logical track, including CUE bounds; follows the audible source
+/// during a crossfade just like audio_get_progress.
+pub fn audio_get_current_source() -> Option<SourceIdentity> {
+    read_audio_engine(|handle| handle.get_current_source()).flatten()
+}
+
+/// Get the number of audio channels.
+pub fn audio_get_channels() -> Option<usize> {
+    read_audio_engine(|handle| handle.channels())
+}
+
+/// Shutdown the audio engine.
+pub fn audio_shutdown() -> Result<(), String> {
+    ENGINE_MANAGER.shutdown()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audio::crossfader::CrossfadeCurve;
+
+    static CROSSFADE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn pending_crossfade_round_trip() {
+        let _guard = CROSSFADE_TEST_LOCK.lock().unwrap();
+        let _ = take_pending_crossfade();
+
+        set_pending_crossfade(true, 5.0);
+        set_pending_crossfade_curve(CrossfadeCurve::Linear);
+        let (enabled, dur, curve) = take_pending_crossfade().expect("pending set");
+        assert!(enabled);
+        assert!((dur - 5.0).abs() < 1e-6);
+        assert_eq!(curve, CrossfadeCurve::Linear);
+        assert!(take_pending_crossfade().is_none(), "take must clear");
+
+        set_pending_crossfade(false, 12.5);
+        let (enabled, dur, _) = take_pending_crossfade().unwrap();
+        assert!(!enabled, "disabled state must round-trip");
+        assert!((dur - 12.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn pending_crossfade_all_curves() {
+        let _guard = CROSSFADE_TEST_LOCK.lock().unwrap();
+        for (curve, expect) in [
+            (CrossfadeCurve::EqualPower, CrossfadeCurve::EqualPower),
+            (CrossfadeCurve::Linear, CrossfadeCurve::Linear),
+            (CrossfadeCurve::SquareRoot, CrossfadeCurve::SquareRoot),
+            (CrossfadeCurve::SCurve, CrossfadeCurve::SCurve),
+        ] {
+            let _ = take_pending_crossfade();
+            set_pending_crossfade(true, 3.0);
+            set_pending_crossfade_curve(curve);
+            let (_, _, got) = take_pending_crossfade().unwrap();
+            assert_eq!(got, expect, "curve {:?} did not round-trip", curve);
+        }
+    }
+
+    #[test]
+    fn pending_equalizer_round_trip() {
+        let _ = take_pending_equalizer();
+
+        let specs = vec![EqBandSpec {
+            band_type: crate::audio::equalizer::EqBandType::Peaking,
+            freq_hz: 1000.0,
+            gain_db: 4.5,
+            q: 1.2,
+        }];
+        set_pending_equalizer(true, -7.5, specs.clone());
+        let (enabled, preamp_db, got) = take_pending_equalizer().expect("pending set");
+        assert!(enabled);
+        assert_eq!(preamp_db, -7.5);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].freq_hz, 1000.0);
+        assert_eq!(got[0].gain_db, 4.5);
+        assert!(take_pending_equalizer().is_none(), "take must clear");
+
+        set_pending_equalizer(false, 0.0, Vec::new());
+        let (enabled, preamp_db, got) = take_pending_equalizer().unwrap();
+        assert!(!enabled, "disabled state must round-trip");
+        assert_eq!(preamp_db, 0.0);
+        assert!(got.is_empty());
+    }
+
+    #[test]
+    fn queue_compat_rejects_pcm_track_on_dsd_engine() {
+        // The original bug: after a DSF track the engine is raw at the DSD
+        // carrier/byte rate; queueing a FLAC onto it would resample the PCM
+        // into the DSD wire pipeline → distortion.
+        let flac_plan = TrackEnginePlan {
+            sample_rate: 44_100,
+            is_raw: false,
+            dsd_mode: None,
+        };
+        assert!(!queue_compatible_with_engine(176_400, true, &flac_plan));
+        assert!(!queue_compatible_with_engine(2_822_400, true, &flac_plan));
+    }
+
+    #[test]
+    fn queue_compat_rejects_dsd_track_on_pcm_engine() {
+        // The reverse direction: a queued DSF cannot ride a PCM engine.
+        let dsd_plan = TrackEnginePlan {
+            sample_rate: 2_822_400,
+            is_raw: true,
+            dsd_mode: Some(DsdOutputMode::Native),
+        };
+        assert!(!queue_compatible_with_engine(44_100, false, &dsd_plan));
+        assert!(!queue_compatible_with_engine(176_400, false, &dsd_plan));
+    }
+
+    #[test]
+    fn queue_compat_accepts_matching_configs() {
+        let pcm = TrackEnginePlan {
+            sample_rate: 44_100,
+            is_raw: false,
+            dsd_mode: None,
+        };
+        assert!(queue_compatible_with_engine(44_100, false, &pcm));
+
+        let dop = TrackEnginePlan {
+            sample_rate: 176_400,
+            is_raw: true,
+            dsd_mode: Some(DsdOutputMode::Dop),
+        };
+        assert!(queue_compatible_with_engine(176_400, true, &dop));
+    }
+
+    #[test]
+    fn queue_compat_rejects_rate_change_and_raw_flip() {
+        let pcm_96 = TrackEnginePlan {
+            sample_rate: 96_000,
+            is_raw: false,
+            dsd_mode: None,
+        };
+        assert!(
+            !queue_compatible_with_engine(44_100, false, &pcm_96),
+            "rate change must skip"
+        );
+
+        let dop = TrackEnginePlan {
+            sample_rate: 44_100,
+            is_raw: true,
+            dsd_mode: Some(DsdOutputMode::Dop),
+        };
+        assert!(
+            !queue_compatible_with_engine(44_100, false, &dop),
+            "raw flip must skip"
+        );
+    }
+
+    #[test]
+    fn decide_queue_plan_pins_pcm_rate_change_when_crossfading() {
+        let pcm_96 = TrackEnginePlan {
+            sample_rate: 96_000,
+            is_raw: false,
+            dsd_mode: None,
+        };
+        assert_eq!(
+            decide_queue_plan(44_100, false, &pcm_96, true),
+            QueuePlanDecision::PinResampleToEngineRate,
+            "crossfade must be able to queue a rate-changing PCM successor"
+        );
+
+        let pcm_44 = TrackEnginePlan {
+            sample_rate: 44_100,
+            is_raw: false,
+            dsd_mode: None,
+        };
+        assert_eq!(
+            decide_queue_plan(44_100, false, &pcm_44, true),
+            QueuePlanDecision::Compatible
+        );
+        assert_eq!(
+            decide_queue_plan(44_100, false, &pcm_96, false),
+            QueuePlanDecision::Skip,
+            "without the pin a rate change must still renegotiate"
+        );
+    }
+
+    #[test]
+    fn decide_queue_plan_never_pins_dsd_or_raw_engines() {
+        let dsd_plan = TrackEnginePlan {
+            sample_rate: 176_400,
+            is_raw: true,
+            dsd_mode: Some(DsdOutputMode::Dop),
+        };
+        assert_eq!(
+            decide_queue_plan(44_100, false, &dsd_plan, true),
+            QueuePlanDecision::Skip,
+            "DSD boundaries hard-cut instead of pinning"
+        );
+
+        let dsd_pcm = TrackEnginePlan {
+            sample_rate: 44_100,
+            is_raw: false,
+            dsd_mode: Some(DsdOutputMode::PcmDecimation),
+        };
+        assert_eq!(
+            decide_queue_plan(96_000, false, &dsd_pcm, true),
+            QueuePlanDecision::Skip
+        );
+
+        let pcm = TrackEnginePlan {
+            sample_rate: 44_100,
+            is_raw: false,
+            dsd_mode: None,
+        };
+        assert_eq!(
+            decide_queue_plan(176_400, true, &pcm, true),
+            QueuePlanDecision::Skip,
+            "a raw engine cannot take a PCM pin"
+        );
+    }
+
+    fn write_test_wav(path: &std::path::Path, sample_rate: u32, channels: u16, frames: u32) {
+        let bits: u16 = 16;
+        let block_align = channels * bits / 8;
+        let data_len = frames * u32::from(block_align);
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + data_len).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&channels.to_le_bytes());
+        wav.extend_from_slice(&sample_rate.to_le_bytes());
+        wav.extend_from_slice(&(sample_rate * u32::from(block_align)).to_le_bytes());
+        wav.extend_from_slice(&block_align.to_le_bytes());
+        wav.extend_from_slice(&bits.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&data_len.to_le_bytes());
+        wav.resize(wav.len() + data_len as usize, 0);
+        std::fs::write(path, &wav).expect("write wav");
+    }
+
+    #[test]
+    fn plan_pcm_file_targets_file_rate_without_raw() {
+        let dir = std::env::temp_dir().join(format!("flick_plan_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("tone.wav");
+        write_test_wav(&path, 44_100, 2, 64);
+
+        let plan = plan_track_engine_config(&path).expect("plan");
+        assert!(!plan.is_raw);
+        assert_eq!(plan.dsd_mode, None);
+        #[cfg(not(target_os = "android"))]
+        assert_eq!(plan.sample_rate, 44_100);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

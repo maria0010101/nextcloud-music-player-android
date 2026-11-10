@@ -38,6 +38,9 @@ class SettingsViewModel(
     val albumNameLevels: StateFlow<Set<Int>> = settingsDataStore.albumNameLevels
         .stateIn(viewModelScope, SharingStarted.Lazily, AppSettingsDataStore.DEFAULT_ALBUM_NAME_LEVELS)
 
+    val audioEngine: StateFlow<String> = settingsDataStore.audioEngine
+        .stateIn(viewModelScope, SharingStarted.Lazily, AppSettingsDataStore.AUDIO_ENGINE_SYSTEM)
+
     val volumeSteps: StateFlow<Int> = settingsDataStore.volumeSteps
         .stateIn(viewModelScope, SharingStarted.Lazily, AppSettingsDataStore.DEFAULT_VOLUME_STEPS)
 
@@ -171,6 +174,10 @@ class SettingsViewModel(
             settingsDataStore.saveAlbumNameLevels(newLevels)
             repository.reapplyAlbumNameLevels(newLevels, musicFolder.value)
         }
+    }
+
+    fun updateAudioEngine(engine: String) {
+        viewModelScope.launch { settingsDataStore.saveAudioEngine(engine) }
     }
 
     fun updateVolumeSteps(newSteps: Int) {

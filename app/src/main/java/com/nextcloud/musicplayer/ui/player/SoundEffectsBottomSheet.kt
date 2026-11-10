@@ -36,6 +36,28 @@ fun SoundEffectsBottomSheet(
     playerViewModel: PlayerViewModel,
     onDismiss: () -> Unit
 ) {
+    val policy by playerViewModel.playbackSettings.collectAsState()
+    if (policy.isFlick) {
+        ModalBottomSheet(
+            onDismissRequest = onDismiss,
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ) {
+            Column(Modifier.fillMaxWidth().padding(24.dp)) {
+                Text("Flick Rust audio engine", style = MaterialTheme.typography.titleLarge)
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    if (policy.isBitPerfect) "已選擇 bit-perfect：播放時將旁路 App 音量縮放、等化器、AutoEq 與聲道平衡，僅在相容 USB 輸出條件成立時播放。請透過外接設備控制音量。"
+                    else "目前使用 Flick Rust 播放路徑；原生系統等化器、AutoEq 與聲道平衡不套用。音量調節精度可在選項中設定。"
+                )
+                Spacer(Modifier.height(12.dp))
+                Text("原生音效設定已保留；切回原生系統音效控制後可再次調整。")
+                TextButton(onClick = onDismiss) { Text("關閉") }
+                Spacer(Modifier.height(20.dp))
+            }
+        }
+        return
+    }
+
     val audioEffectManager = playerViewModel.audioEffectManager
     val soundProfileManager = playerViewModel.soundProfileManager
 

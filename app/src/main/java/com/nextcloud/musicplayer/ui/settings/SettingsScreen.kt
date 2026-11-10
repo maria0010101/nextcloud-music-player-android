@@ -20,6 +20,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.nextcloud.musicplayer.ui.folder.FolderPickerDialog
+import com.nextcloud.musicplayer.core.settings.AppSettingsDataStore
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -38,6 +39,8 @@ fun SettingsScreen(
     val isSyncing by viewModel.isSyncing.collectAsState()
     val syncMessage by viewModel.syncMessage.collectAsState()
     val volumeSteps by viewModel.volumeSteps.collectAsState()
+    val audioEngine by viewModel.audioEngine.collectAsState()
+    val isFlick = audioEngine == AppSettingsDataStore.AUDIO_ENGINE_FLICK
     val enableAlbumTitleMarquee by viewModel.enableAlbumTitleMarquee.collectAsState()
     val enableTrackTitleMarquee by viewModel.enableTrackTitleMarquee.collectAsState()
 
@@ -482,6 +485,44 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(28.dp))
 
+            Text(
+                text = "音訊引擎",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    listOf(
+                        AppSettingsDataStore.AUDIO_ENGINE_SYSTEM to "原生系統音效控制",
+                        AppSettingsDataStore.AUDIO_ENGINE_FLICK to "Flick Rust audio engine"
+                    ).forEach { (engine, label) ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth()
+                                .clickable { viewModel.updateAudioEngine(engine) }
+                                .padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = audioEngine == engine,
+                                onClick = { viewModel.updateAudioEngine(engine) }
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(label, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                    Text(
+                        "切換引擎會暫停播放。Flick 使用獨立 Rust 播放路徑；Android 等化器、AutoEq 與聲道平衡不套用於 Flick。",
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(28.dp))
+
             // 5. 音效與等化器 (AutoEq 耳機校準、10 頻段等化器、聲道平衡)
             Text(
                 text = "音訊效果與等化器",
@@ -497,13 +538,15 @@ fun SettingsScreen(
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "AutoEq 耳機音質校準、10 頻段圖形等化器與立體聲聲道平衡",
+                        text = if (isFlick) "Flick 引擎不套用原生系統等化器；既有音效設定會保留，切回原生引擎後恢復。"
+                        else "AutoEq 耳機音質校準、10 頻段圖形等化器與立體聲聲道平衡",
                         style = MaterialTheme.typography.labelMedium
                     )
                     Spacer(modifier = Modifier.height(10.dp))
 
                     Button(
                         onClick = onOpenSoundEffects,
+                        enabled = !isFlick,
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(8.dp)
                     ) {
@@ -530,34 +573,46 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text("自訂 App 內部音量段數；切換前景與背景時保留設定，不改動系統音量。", style = MaterialTheme.typography.labelMedium)
+                    Text("關閉時使用系統音量；高精度模式只調整 App 音量，不改動系統音量。", style = MaterialTheme.typography.labelMedium)
                     Spacer(modifier = Modifier.height(8.dp))
 
                     val volumeOptions = listOf(
-                        15 to "預設 15 段",
+                        AppSettingsDataStore.VOLUME_SYSTEM to "關閉音量調節精度（使用系統音量）",
                         25 to "高精度 25 段",
-                        30 to "進階 30 段",
                         50 to "超高精度 50 段",
-                        100 to "極致精準 100 段"
+                        100 to "極致精準 100 段",
+                        AppSettingsDataStore.VOLUME_BIT_PERFECT to "bit-perfect（僅 Flick Rust 引擎）"
                     )
 
                     volumeOptions.forEach { (steps, label) ->
                         val isSelected = volumeSteps == steps
+                        val available = steps != AppSettingsDataStore.VOLUME_BIT_PERFECT || isFlick
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable { viewModel.updateVolumeSteps(steps) }
+                                .clickable(enabled = available) { viewModel.updateVolumeSteps(steps) }
                                 .padding(vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             RadioButton(
                                 selected = isSelected,
+                                enabled = available,
                                 onClick = { viewModel.updateVolumeSteps(steps) }
                             )
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text(text = label, style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                text = label,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (available) MaterialTheme.colorScheme.onSurface
+                                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                            )
                         }
                     }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "bit-perfect 關閉 App 音量縮放與所有音效，需相容 USB DAC；不符合條件時停止播放，不自動重採樣。請先以外接設備設定合適音量，再啟用；App 不會將系統音量推滿。",
+                        style = MaterialTheme.typography.labelMedium
+                    )
                 }
             }
 

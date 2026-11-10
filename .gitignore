@@ -15,3 +15,6 @@ app/build
 *.keystore
 *.jks
 .kotlin/
+
+# Built by native/flick/build-android.sh
+app/src/main/jniLibs/

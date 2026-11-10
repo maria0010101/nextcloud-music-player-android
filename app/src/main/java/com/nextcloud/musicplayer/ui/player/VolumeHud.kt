@@ -53,7 +53,7 @@ fun VolumeHud(
     )
 
     AnimatedVisibility(
-        visible = showHud,
+        visible = showHud && volumeSteps > 0,
         enter = fadeIn(animationSpec = tween(150)) + slideInHorizontally(
             initialOffsetX = { fullWidth -> fullWidth },
             animationSpec = tween(200)

@@ -13,7 +13,7 @@ class VolumeStepManagerTest {
 
     @Test
     fun internalGainIsMonotonicAtEverySupportedStepCount() {
-        for (steps in listOf(15, 25, 30, 50, 100)) {
+        for (steps in listOf(25, 50, 100)) {
             var previous = -1f
             for (step in 0..steps) {
                 val gain = PlaybackVolume.fractionToGain(step.toFloat() / steps)

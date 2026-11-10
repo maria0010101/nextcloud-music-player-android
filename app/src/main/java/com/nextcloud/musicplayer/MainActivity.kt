@@ -37,6 +37,7 @@ class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3WindowSizeClassApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        volumeControlStream = android.media.AudioManager.STREAM_MUSIC
 
         // Request POST_NOTIFICATIONS on Android 13+ for Foreground Service notification
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -109,24 +110,35 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        if (isVolumeKey(keyCode) && !playerViewModel.volumeControlsReady) return true
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_MUTE && playerViewModel.isBitPerfect) return true
         if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
-            val isIncrement = (keyCode == KeyEvent.KEYCODE_VOLUME_UP)
-            playerViewModel.adjustVolume(isIncrement)
-            return true
+            if (playerViewModel.isBitPerfect) return true
+            if (playerViewModel.usesAppVolume) {
+                val isIncrement = (keyCode == KeyEvent.KEYCODE_VOLUME_UP)
+                playerViewModel.adjustVolume(isIncrement)
+                return true
+            }
+            // Precision off: Android owns the media-volume keys and its native volume panel.
         }
         return super.onKeyDown(keyCode, event)
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
+        if (isVolumeKey(keyCode) && !playerViewModel.volumeControlsReady) return true
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_MUTE && playerViewModel.isBitPerfect) return true
         if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
-            return true
+            if (playerViewModel.isBitPerfect || playerViewModel.usesAppVolume) return true
         }
         return super.onKeyUp(keyCode, event)
     }
 
+    private fun isVolumeKey(keyCode: Int): Boolean = keyCode == KeyEvent.KEYCODE_VOLUME_UP ||
+        keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == KeyEvent.KEYCODE_VOLUME_MUTE
+
     override fun onStart() {
         super.onStart()
-        // 啟動／切入前台：恢復 App 內部音量，不讀寫系統音量
+        // 只對齊音量 HUD；播放服務按目前政策套用實際增益。
         playerViewModel.onAppForeground()
     }
 

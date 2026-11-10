@@ -12,6 +12,7 @@ import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "app_settings")
 
@@ -22,13 +23,18 @@ class AppSettingsDataStore(private val context: Context) {
         val KEY_MUSIC_FOLDER = stringPreferencesKey("music_folder")
         val KEY_ALBUM_NAME_LEVELS = stringSetPreferencesKey("album_name_levels")
         val KEY_VOLUME_STEPS = intPreferencesKey("volume_steps_key")
+        val KEY_AUDIO_ENGINE = stringPreferencesKey("audio_engine")
         val PREF_ENABLE_ALBUM_TITLE_MARQUEE = booleanPreferencesKey("pref_enable_album_title_marquee")
         val PREF_ENABLE_TRACK_TITLE_MARQUEE = booleanPreferencesKey("pref_enable_track_title_marquee")
         val PREF_ALBUM_VIEW_MODE = intPreferencesKey("pref_album_view_mode")
 
         const val DEFAULT_CACHE_BYTES = 1024L * 1024L * 1024L // 1GB default
         val DEFAULT_ALBUM_NAME_LEVELS = setOf(2, 3) // 預設勾選階層 2、階層 3
-        const val DEFAULT_VOLUME_STEPS = 15
+        const val AUDIO_ENGINE_SYSTEM = AudioPlaybackSettings.ENGINE_SYSTEM
+        const val AUDIO_ENGINE_FLICK = AudioPlaybackSettings.ENGINE_FLICK
+        const val VOLUME_SYSTEM = AudioPlaybackSettings.VOLUME_SYSTEM
+        const val VOLUME_BIT_PERFECT = AudioPlaybackSettings.VOLUME_BIT_PERFECT
+        const val DEFAULT_VOLUME_STEPS = VOLUME_SYSTEM
         const val DEFAULT_ENABLE_ALBUM_TITLE_MARQUEE = false
         const val DEFAULT_ENABLE_TRACK_TITLE_MARQUEE = true
         const val DEFAULT_ALBUM_VIEW_MODE = 2 // 預設 2 欄網格
@@ -51,9 +57,12 @@ class AppSettingsDataStore(private val context: Context) {
         }
     }
 
-    val volumeSteps: Flow<Int> = context.dataStore.data.map { preferences ->
-        preferences[KEY_VOLUME_STEPS] ?: DEFAULT_VOLUME_STEPS
-    }
+    val playbackSettings: Flow<AudioPlaybackSettings> = context.dataStore.data.map { preferences ->
+        AudioPlaybackSettings.normalize(preferences[KEY_AUDIO_ENGINE], preferences[KEY_VOLUME_STEPS])
+    }.distinctUntilChanged()
+
+    val audioEngine: Flow<String> = playbackSettings.map { it.audioEngine }
+    val volumeSteps: Flow<Int> = playbackSettings.map { it.volumeSteps }
 
     val enableAlbumTitleMarquee: Flow<Boolean> = context.dataStore.data.map { preferences ->
         preferences[PREF_ENABLE_ALBUM_TITLE_MARQUEE] ?: DEFAULT_ENABLE_ALBUM_TITLE_MARQUEE
@@ -87,7 +96,16 @@ class AppSettingsDataStore(private val context: Context) {
 
     suspend fun saveVolumeSteps(steps: Int) {
         context.dataStore.edit { preferences ->
-            preferences[KEY_VOLUME_STEPS] = steps
+            val policy = AudioPlaybackSettings.normalize(preferences[KEY_AUDIO_ENGINE], steps)
+            preferences[KEY_VOLUME_STEPS] = policy.volumeSteps
+        }
+    }
+
+    suspend fun saveAudioEngine(engine: String) {
+        context.dataStore.edit { preferences ->
+            val policy = AudioPlaybackSettings.normalize(engine, preferences[KEY_VOLUME_STEPS])
+            preferences[KEY_AUDIO_ENGINE] = policy.audioEngine
+            preferences[KEY_VOLUME_STEPS] = policy.volumeSteps
         }
     }
 

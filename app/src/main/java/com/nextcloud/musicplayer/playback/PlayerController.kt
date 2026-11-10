@@ -94,10 +94,12 @@ class PlayerController(
                 mediaController = controller
                 setupPlayerListener(controller)
                 updateStateFromPlayer(controller)
-                val vol = pendingVolume ?: currentVolume
-                controller.volume = vol
+                // The service owns initial/mode-transition gain. Only replay a genuine
+                // manual adjustment made while connecting, never a stale settings snapshot.
+                pendingVolume?.let { controller.volume = it }
                 pendingVolume = null
-                Log.d(TAG, "MediaController 已成功連線，套用音量: $vol")
+                currentVolume = controller.volume
+                Log.d(TAG, "MediaController 已成功連線")
                 onConnected?.invoke(controller)
             } catch (e: Exception) {
                 Log.e(TAG, "MediaController 連線失敗", e)
@@ -531,7 +533,7 @@ class PlayerController(
         }
     }
 
-    private var currentVolume: Float = PlaybackVolume.readGain(context)
+    private var currentVolume: Float = 1f
     private var pendingVolume: Float? = null
 
     fun setVolume(volume: Float) {

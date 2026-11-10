@@ -1,0 +1,756 @@
+//! Audio source abstraction for gapless playback.
+//!
+//! The source provider manages multiple audio sources and handles
+//! seamless transitions between them.
+
+use ringbuf::traits::{Consumer, Observer, Producer, Split};
+use ringbuf::HeapRb;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::Arc;
+
+/// Size of the sample ring buffer per source (in samples, not frames)
+/// 48000 samples/sec * 2 channels * 5 seconds = 480,000 samples
+pub const SOURCE_BUFFER_SIZE: usize = 480_000;
+
+/// File-relative bounds of a logical PCM track. The end is exclusive; None
+/// means decode to EOF. Playback positions remain relative to the start.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct PlaybackRange {
+    pub start_secs: f64,
+    pub end_secs: Option<f64>,
+}
+
+impl PlaybackRange {
+    pub(crate) fn validate(self) -> Result<Self, String> {
+        if !self.start_secs.is_finite() || self.start_secs < 0.0 {
+            return Err("Invalid playback range start".to_string());
+        }
+        if let Some(end) = self.end_secs {
+            if !end.is_finite() || end <= self.start_secs {
+                return Err("Playback range end must be after its start".to_string());
+            }
+        }
+        Ok(self)
+    }
+}
+
+/// Unlike a path alone, this distinguishes adjacent tracks in a CUE album.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SourceIdentity {
+    pub path: String,
+    pub range: PlaybackRange,
+}
+
+/// Metadata about an audio source.
+#[derive(Debug, Clone)]
+pub struct SourceInfo {
+    /// Path to the audio file
+    pub path: PathBuf,
+    pub range: PlaybackRange,
+    /// Sample rate of the source (before resampling)
+    pub original_sample_rate: u32,
+    /// Output sample rate (after resampling)
+    pub output_sample_rate: u32,
+    /// Number of channels
+    pub channels: usize,
+    /// Total duration in samples (after resampling to output rate)
+    pub total_samples: u64,
+    /// Total duration in seconds
+    pub duration_secs: f64,
+    // ponytail: HTTP origin (full url + auth headers/query) for remote streams.
+    // None for local files. Lets handle_seek re-spawn the decoder over HTTP
+    // instead of mistaking the URL label (SourceInfo.path) for a local path,
+    // which fails and drops the engine to Idle. Per-source so it auto-clears
+    // on track change. Note: HashMap Debug would print headers — never log
+    // SourceInfo wholesale in release paths.
+    pub http_origin: Option<(String, HashMap<String, String>)>,
+}
+
+impl SourceInfo {
+    pub(crate) fn identity(&self) -> SourceIdentity {
+        SourceIdentity {
+            path: self.path.to_string_lossy().to_string(),
+            range: self.range,
+        }
+    }
+}
+
+/// State of an audio source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceState {
+    /// Source is being loaded/decoded
+    Loading,
+    /// Source is ready for playback
+    Ready,
+    /// Source is currently playing
+    Playing,
+    /// Source has finished (all samples consumed)
+    Finished,
+    /// Source encountered an error
+    Error,
+}
+
+/// An audio source that provides samples from a ring buffer.
+///
+/// This is the consumer side - samples are produced by the decoder thread
+/// and consumed by the audio callback.
+pub struct AudioSource {
+    /// Source metadata
+    pub info: SourceInfo,
+    /// Current state
+    state: SourceState,
+    /// Ring buffer consumer (receives samples from decoder)
+    consumer: ringbuf::HeapCons<f32>,
+    /// Ring buffer capacity in samples (interleaved)
+    capacity: usize,
+    /// Flag indicating decoder has finished writing all samples
+    decoder_finished: Arc<AtomicBool>,
+    /// Current playback position in samples
+    position: Arc<AtomicU64>,
+    /// Flag to signal the decoder to stop
+    stop_signal: Arc<AtomicBool>,
+    /// ReplayGain multiplier (linear, f32 bits). 1.0 = neutral. Applied to
+    /// every sample this source emits, so each track (and each side of a
+    /// crossfade, and the gapless swap) keeps its own gain.
+    replaygain_gain: AtomicU32,
+    /// The dB value [replaygain_gain] was derived from (f32 bits). Kept for
+    /// seek re-spawns, which build a new source for the same track.
+    replaygain_db: AtomicU32,
+    /// When true, `read()` must not multiply samples: the f32 bit patterns
+    /// are the payload (native DSD bytes / DoP words), so any gain would
+    /// corrupt the bitstream.
+    bit_exact: AtomicBool,
+}
+
+/// Handle given to the decoder thread to write samples.
+pub struct SourceProducer {
+    /// Ring buffer producer
+    producer: ringbuf::HeapProd<f32>,
+    /// Flag to set when decoding is complete
+    decoder_finished: Arc<AtomicBool>,
+    /// Position tracker (shared with consumer, for future seek support)
+    #[allow(dead_code)]
+    position: Arc<AtomicU64>,
+    /// Stop signal from consumer
+    stop_signal: Arc<AtomicBool>,
+    /// Total samples written
+    samples_written: u64,
+}
+
+impl AudioSource {
+    /// Create a new audio source with its producer.
+    ///
+    /// Returns the source (for the audio thread) and producer (for the decoder thread).
+    pub fn new(info: SourceInfo) -> (Self, SourceProducer) {
+        Self::new_with_capacity(info, SOURCE_BUFFER_SIZE)
+    }
+
+    /// Create a new audio source with an explicit ring capacity (samples,
+    /// interleaved). DSD native playback needs a larger ring: each offload
+    /// write pulls a whole 256 KiB chunk, over half of the default ring, so
+    /// any producer hiccup turns into an injected silence gap (crackle).
+    pub fn new_with_capacity(info: SourceInfo, capacity: usize) -> (Self, SourceProducer) {
+        let ring = HeapRb::<f32>::new(capacity);
+        let (producer, consumer) = ring.split();
+
+        let decoder_finished = Arc::new(AtomicBool::new(false));
+        let position = Arc::new(AtomicU64::new(0));
+        let stop_signal = Arc::new(AtomicBool::new(false));
+
+        let source = AudioSource {
+            info,
+            state: SourceState::Loading,
+            consumer,
+            capacity,
+            decoder_finished: Arc::clone(&decoder_finished),
+            position: Arc::clone(&position),
+            stop_signal: Arc::clone(&stop_signal),
+            replaygain_gain: AtomicU32::new(1.0f32.to_bits()),
+            replaygain_db: AtomicU32::new(0.0f32.to_bits()),
+            bit_exact: AtomicBool::new(false),
+        };
+
+        let producer = SourceProducer {
+            producer,
+            decoder_finished,
+            position,
+            stop_signal,
+            samples_written: 0,
+        };
+
+        (source, producer)
+    }
+
+    /// Get the current state.
+    #[inline]
+    pub fn state(&self) -> SourceState {
+        self.state
+    }
+
+    /// Set the state to ready (called when enough samples are buffered).
+    pub fn set_ready(&mut self) {
+        if self.state == SourceState::Loading {
+            self.state = SourceState::Ready;
+        }
+    }
+
+    /// Set the state to playing.
+    pub fn set_playing(&mut self) {
+        self.state = SourceState::Playing;
+    }
+
+    /// Check if the source has finished (all samples consumed and decoder done).
+    pub fn is_finished(&self) -> bool {
+        self.state == SourceState::Finished
+            || (self.decoder_finished.load(Ordering::Acquire) && self.consumer.is_empty())
+    }
+
+    /// Get the current playback position in samples.
+    #[inline]
+    pub fn position_samples(&self) -> u64 {
+        self.position.load(Ordering::Relaxed)
+    }
+
+    /// Get the current playback position in seconds.
+    #[inline]
+    pub fn position_secs(&self) -> f64 {
+        // Position is in samples (interleaved) at the output sample rate, so divide by channels
+        let samples = self.position_samples();
+        let frames = samples / self.info.channels as u64;
+        let rate = self.info.output_sample_rate;
+        if rate == 0 {
+            return 0.0;
+        }
+        frames as f64 / rate as f64
+    }
+
+    /// Set the current playback position in seconds.
+    ///
+    /// Used after decoder-side seeks; relative to this logical track's start.
+    pub fn set_position_secs(&self, position_secs: f64) {
+        let clamped_secs = position_secs.max(0.0);
+        let frames = (clamped_secs * self.info.output_sample_rate as f64).round() as u64;
+        let samples = frames.saturating_mul(self.info.channels as u64);
+        self.position.store(samples, Ordering::Relaxed);
+    }
+
+    /// Current ReplayGain multiplier (linear).
+    #[inline]
+    pub fn replaygain_gain(&self) -> f32 {
+        f32::from_bits(self.replaygain_gain.load(Ordering::Relaxed))
+    }
+
+    /// Current ReplayGain value in dB (0.0 = neutral).
+    #[inline]
+    pub fn replaygain_db(&self) -> f32 {
+        f32::from_bits(self.replaygain_db.load(Ordering::Relaxed))
+    }
+
+    /// Set the ReplayGain multiplier (linear). 1.0 = neutral.
+    #[inline]
+    pub fn set_replaygain_gain(&self, gain: f32) {
+        self.replaygain_gain.store(gain.to_bits(), Ordering::Relaxed);
+    }
+
+    /// Set the ReplayGain value in dB and derive the linear multiplier.
+    #[inline]
+    pub fn set_replaygain_db(&self, gain_db: f32) {
+        self.replaygain_db.store(gain_db.to_bits(), Ordering::Relaxed);
+        let gain = 10.0f32.powf(gain_db / 20.0);
+        self.replaygain_gain.store(gain.to_bits(), Ordering::Relaxed);
+    }
+
+    /// Mark this source as carrying bit-exact payload (native DSD / DoP):
+    /// ReplayGain is ignored on `read()` because multiplying the f32 bit
+    /// patterns would corrupt the DSD bits.
+    #[inline]
+    pub fn set_bit_exact(&self, exact: bool) {
+        self.bit_exact.store(exact, Ordering::Relaxed);
+    }
+
+    /// Get the buffer fill level (0.0 to 1.0).
+    #[inline]
+    pub fn buffer_level(&self) -> f32 {
+        self.consumer.occupied_len() as f32 / self.capacity as f32
+    }
+
+    /// Ring buffer capacity in samples (interleaved).
+    #[inline]
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+
+    /// Samples currently buffered (interleaved).
+    #[inline]
+    pub fn buffered_samples(&self) -> usize {
+        self.consumer.occupied_len()
+    }
+
+    /// Check if there are enough samples buffered for playback.
+    #[inline]
+    pub fn has_enough_buffer(&self) -> bool {
+        // Need at least 0.5 seconds of audio buffered (at output sample rate)
+        let min_samples = (self.info.output_sample_rate as usize / 2) * self.info.channels;
+        self.consumer.occupied_len() >= min_samples || self.decoder_finished.load(Ordering::Acquire)
+    }
+
+    /// Read samples from the buffer into the output.
+    ///
+    /// This is the main function called by the audio callback.
+    /// It's designed to be real-time safe (no allocations, no blocking).
+    ///
+    /// # Returns
+    /// Number of samples actually read.
+    #[inline]
+    pub fn read(&mut self, output: &mut [f32]) -> usize {
+        let read = self.consumer.pop_slice(output);
+
+        if read > 0 {
+            self.position.fetch_add(read as u64, Ordering::Relaxed);
+            let gain = if self.bit_exact.load(Ordering::Relaxed) {
+                1.0
+            } else {
+                self.replaygain_gain()
+            };
+            if gain != 1.0 {
+                for sample in output[..read].iter_mut() {
+                    *sample *= gain;
+                }
+            }
+        }
+
+        // Check if we've finished
+        if self.decoder_finished.load(Ordering::Acquire) && self.consumer.is_empty() {
+            self.state = SourceState::Finished;
+        }
+
+        read
+    }
+
+    /// Signal the decoder to stop (used when skipping tracks).
+    pub fn signal_stop(&self) {
+        self.stop_signal.store(true, Ordering::Release);
+    }
+
+    /// Get remaining duration in seconds.
+    pub fn remaining_secs(&self) -> f64 {
+        let remaining_samples = self
+            .info
+            .total_samples
+            .saturating_sub(self.position_samples());
+        let remaining_frames = remaining_samples / self.info.channels as u64;
+        remaining_frames as f64 / self.info.output_sample_rate as f64
+    }
+}
+
+impl SourceProducer {
+    /// Write samples to the ring buffer.
+    ///
+    /// # Returns
+    /// Number of samples actually written (may be less than input if buffer is full).
+    pub fn write(&mut self, samples: &[f32]) -> usize {
+        let written = self.producer.push_slice(samples);
+        self.samples_written += written as u64;
+        written
+    }
+
+    /// Check if the stop signal has been set.
+    #[inline]
+    pub fn should_stop(&self) -> bool {
+        self.stop_signal.load(Ordering::Acquire)
+    }
+
+    /// Get the available space in the ring buffer.
+    #[inline]
+    pub fn available_space(&self) -> usize {
+        self.producer.vacant_len()
+    }
+
+    /// Check if there's enough space to write a chunk.
+    #[inline]
+    pub fn can_write(&self, size: usize) -> bool {
+        self.producer.vacant_len() >= size
+    }
+
+    /// Mark the source as fully decoded.
+    pub fn finish(&self) {
+        self.decoder_finished.store(true, Ordering::Release);
+    }
+
+    /// Get total samples written so far.
+    pub fn samples_written(&self) -> u64 {
+        self.samples_written
+    }
+
+    /// Wait for space in the buffer (with timeout).
+    ///
+    /// This is NOT real-time safe and should only be used in the decoder thread.
+    pub fn wait_for_space(&self, min_space: usize, timeout_ms: u64) -> bool {
+        use std::thread::sleep;
+        use std::time::{Duration, Instant};
+
+        let start = Instant::now();
+        let timeout = Duration::from_millis(timeout_ms);
+
+        while self.producer.vacant_len() < min_space {
+            if self.should_stop() {
+                return false;
+            }
+            if start.elapsed() > timeout {
+                return false;
+            }
+            sleep(Duration::from_millis(1));
+        }
+        true
+    }
+}
+
+/// Source provider manages multiple sources for gapless playback.
+pub struct SourceProvider {
+    /// Currently playing source
+    current: Option<AudioSource>,
+    /// Next source queued for gapless playback
+    next: Option<AudioSource>,
+    /// Output sample rate (for future use in resampling validation)
+    #[allow(dead_code)]
+    output_sample_rate: u32,
+    /// Number of output channels (for future use in channel validation)
+    #[allow(dead_code)]
+    output_channels: usize,
+}
+
+impl SourceProvider {
+    /// Create a new source provider.
+    pub fn new(output_sample_rate: u32, output_channels: usize) -> Self {
+        Self {
+            current: None,
+            next: None,
+            output_sample_rate,
+            output_channels,
+        }
+    }
+
+    /// Set the current source.
+    pub fn set_current(&mut self, source: AudioSource) {
+        // Stop the old source if any
+        if let Some(ref old) = self.current {
+            old.signal_stop();
+        }
+        self.current = Some(source);
+    }
+
+    /// Queue the next source for gapless playback.
+    pub fn queue_next(&mut self, source: AudioSource) {
+        // Stop any previously queued next source
+        if let Some(ref old) = self.next {
+            old.signal_stop();
+        }
+        self.next = Some(source);
+    }
+
+    /// Check if a next source is queued.
+    pub fn has_next(&self) -> bool {
+        self.next.is_some()
+    }
+
+    /// Get a reference to the next source.
+    pub fn next(&self) -> Option<&AudioSource> {
+        self.next.as_ref()
+    }
+
+    /// Check if the next source has buffered audio before mixing it in.
+    pub fn next_has_enough_buffer(&self, min_secs: f64) -> bool {
+        if let Some(next) = &self.next {
+            let buffered_samples = next.consumer.occupied_len();
+            if next.info.channels == 0 || next.info.output_sample_rate == 0 ||
+                buffered_samples < next.info.channels {
+                return false;
+            }
+            // A short, fully decoded source can be shorter than the requested
+            // prebuffer, but must still contain actual audio to fade into.
+            if next.decoder_finished.load(Ordering::Acquire) {
+                return true;
+            }
+            let samples_per_second =
+                next.info.output_sample_rate as f64 * next.info.channels as f64;
+            let buffered_secs = buffered_samples as f64 / samples_per_second;
+            // At very high rates the entire ring may hold less than the
+            // requested prebuffer; never wait for an impossible amount.
+            let threshold = min_secs.min(next.capacity as f64 / samples_per_second * 0.5);
+            buffered_secs >= threshold
+        } else {
+            false
+        }
+    }
+
+    /// Get a reference to the current source.
+    pub fn current(&self) -> Option<&AudioSource> {
+        self.current.as_ref()
+    }
+
+    /// Get a mutable reference to the current source.
+    pub fn current_mut(&mut self) -> Option<&mut AudioSource> {
+        self.current.as_mut()
+    }
+
+    /// Get a mutable reference to the next source.
+    pub fn next_mut(&mut self) -> Option<&mut AudioSource> {
+        self.next.as_mut()
+    }
+
+    /// Transition to the next track (used for gapless playback).
+    ///
+    /// Returns the old source if there was one.
+    pub fn advance_to_next(&mut self) -> Option<AudioSource> {
+        let old = self.current.take();
+        if let Some(ref old_source) = old {
+            old_source.signal_stop();
+        }
+        self.current = self.next.take();
+        old
+    }
+
+    /// Remove and stop the current source, leaving a queued successor (and
+    /// its decoder) intact.
+    ///
+    /// Seek/replay paths must use this instead of [`stop`](Self::stop): the
+    /// successor still belongs to the new timeline, and the Dart side keeps
+    /// its queued-track state across a seek, so wiping it here forces a hard
+    /// reload at track end instead of a crossfade/gapless handoff.
+    pub fn take_current(&mut self) -> Option<AudioSource> {
+        let source = self.current.take();
+        if let Some(ref current) = source {
+            current.signal_stop();
+        }
+        source
+    }
+
+    /// Drop the queued successor (stopping its decoder), leaving the current
+    /// source untouched.
+    pub fn clear_next(&mut self) {
+        if let Some(ref source) = self.next {
+            source.signal_stop();
+        }
+        self.next = None;
+    }
+
+    /// Stop all playback.
+    pub fn stop(&mut self) {
+        if let Some(ref source) = self.current {
+            source.signal_stop();
+        }
+        if let Some(ref source) = self.next {
+            source.signal_stop();
+        }
+        self.current = None;
+        self.next = None;
+    }
+
+    /// Read samples from the current source.
+    ///
+    /// Handles gapless transition if current source ends.
+    ///
+    /// # Returns
+    /// * Number of samples read
+    /// * Whether a track transition occurred
+    #[inline]
+    pub fn read(&mut self, output: &mut [f32]) -> (usize, Option<AudioSource>) {
+        if self.current.is_none() {
+            // No source - fill with silence
+            output.fill(0.0);
+            return (0, None);
+        }
+
+        // Borrow scope for playing current
+        let (read, finished) = {
+            let current = self.current.as_mut().unwrap();
+            let read = current.read(output);
+            (read, read < output.len() && current.is_finished())
+        };
+
+        // If we didn't get enough samples and source is finished, transition
+        if finished {
+            // Fill remaining with silence or next track
+            if self.next.is_some() {
+                // Gapless transition!
+                // Swap current with next, keeping the old current to return
+                let old_source = self.current.replace(self.next.take().unwrap());
+
+                let remaining = &mut output[read..];
+                // Read from new current (which was next)
+                let next_read = self.current.as_mut().unwrap().read(remaining);
+
+                return (read + next_read, old_source);
+            } else {
+                // No next track - clear the finished source so completion is
+                // observed exactly once by the command thread.
+                let finished_source = self.current.take();
+                output[read..].fill(0.0);
+                return (read, finished_source);
+            }
+        }
+
+        (read, None)
+    }
+
+    /// Check if the current track is near the end (for triggering look-ahead).
+    pub fn should_load_next(&self, lookahead_secs: f64) -> bool {
+        if self.next.is_some() {
+            return false; // Already have next queued
+        }
+
+        if let Some(ref current) = self.current {
+            current.remaining_secs() < lookahead_secs
+        } else {
+            false
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AudioSource, SourceInfo, SourceProvider};
+    use std::path::PathBuf;
+
+    fn source_info(path: &str) -> SourceInfo {
+        SourceInfo {
+            path: PathBuf::from(path),
+            range: super::PlaybackRange::default(),
+            original_sample_rate: 48_000,
+            output_sample_rate: 48_000,
+            channels: 2,
+            total_samples: 4,
+            duration_secs: 4.0 / 48_000.0 / 2.0,
+            http_origin: None,
+        }
+    }
+
+    #[test]
+    fn next_buffer_readiness_requires_real_audio() {
+        let (source, mut producer) = AudioSource::new(source_info("next.flac"));
+        let mut provider = SourceProvider::new(48_000, 2);
+        provider.queue_next(source);
+
+        assert!(!provider.next_has_enough_buffer(0.0));
+        assert!(!provider.next_has_enough_buffer(0.1));
+        assert_eq!(producer.write(&[0.1, 0.1]), 2);
+        assert!(provider.next_has_enough_buffer(0.0));
+        assert!(!provider.next_has_enough_buffer(0.1));
+        producer.finish();
+        assert!(provider.next_has_enough_buffer(0.1));
+    }
+
+    #[test]
+    fn completed_empty_next_source_is_not_ready_to_crossfade() {
+        let (source, producer) = AudioSource::new(source_info("empty.flac"));
+        producer.finish();
+        let mut provider = SourceProvider::new(48_000, 2);
+        provider.queue_next(source);
+        assert!(!provider.next_has_enough_buffer(0.0));
+    }
+
+    #[test]
+    fn read_clears_finished_current_source_without_next_track() {
+        let (mut source, mut producer) = AudioSource::new(source_info("track.flac"));
+        source.set_ready();
+        source.set_playing();
+
+        let written = producer.write(&[0.1, 0.2, 0.3, 0.4]);
+        assert_eq!(written, 4);
+        producer.finish();
+
+        let mut provider = SourceProvider::new(48_000, 2);
+        provider.set_current(source);
+
+        let mut output = [0.0; 8];
+        let (read, finished_source) = provider.read(&mut output);
+
+        assert_eq!(read, 4);
+        assert!(finished_source.is_some());
+        assert!(provider.current().is_none());
+    }
+
+    #[test]
+    fn replaygain_db_applies_linear_gain_on_read() {
+        let (mut source, mut producer) = AudioSource::new(source_info("track.flac"));
+        source.set_replaygain_db(-6.0);
+
+        let written = producer.write(&[0.8, -0.8, 0.4, -0.4]);
+        assert_eq!(written, 4);
+        producer.finish();
+
+        let expected_gain = 10.0f32.powf(-6.0 / 20.0); // ≈ 0.501187
+
+        let mut output = [0.0; 4];
+        assert_eq!(source.read(&mut output), 4);
+        assert!((output[0] - 0.8 * expected_gain).abs() < 1e-6, "got {}", output[0]);
+        assert!((output[1] + 0.8 * expected_gain).abs() < 1e-6, "got {}", output[1]);
+        assert!((output[2] - 0.4 * expected_gain).abs() < 1e-6, "got {}", output[2]);
+        assert!((output[3] + 0.4 * expected_gain).abs() < 1e-6, "got {}", output[3]);
+    }
+
+    #[test]
+    fn replaygain_db_derives_linear_multiplier_and_round_trips() {
+        let (source, _producer) = AudioSource::new(source_info("track.flac"));
+        source.set_replaygain_db(6.0206); // ≈ 2x
+        assert!((source.replaygain_gain() - 2.0).abs() < 0.001);
+        assert!((source.replaygain_db() - 6.0206).abs() < 0.001);
+
+        source.set_replaygain_db(0.0);
+        assert_eq!(source.replaygain_gain(), 1.0);
+    }
+
+    #[test]
+    fn bit_exact_source_ignores_replaygain() {
+        let (mut source, mut producer) = AudioSource::new(source_info("track.dsf"));
+        source.set_bit_exact(true);
+        source.set_replaygain_db(-6.0);
+
+        assert_eq!(producer.write(&[0.8, -0.8, 0.4, -0.4]), 4);
+        producer.finish();
+
+        let mut output = [0.0; 4];
+        assert_eq!(source.read(&mut output), 4);
+        assert_eq!(output, [0.8, -0.8, 0.4, -0.4]);
+    }
+
+    #[test]
+    fn take_current_keeps_queued_successor() {
+        let (current, _current_producer) = AudioSource::new(source_info("cur.flac"));
+        let (next, _next_producer) = AudioSource::new(source_info("next.flac"));
+
+        let mut provider = SourceProvider::new(48_000, 2);
+        provider.set_current(current);
+        provider.queue_next(next);
+
+        let taken = provider.take_current();
+
+        assert!(taken.is_some());
+        assert!(provider.current().is_none());
+        assert!(provider.has_next());
+        assert_eq!(
+            provider.next().unwrap().info.path,
+            PathBuf::from("next.flac")
+        );
+    }
+
+    #[test]
+    fn clear_next_drops_only_the_successor() {
+        let (current, _current_producer) = AudioSource::new(source_info("cur.flac"));
+        let (next, _next_producer) = AudioSource::new(source_info("next.flac"));
+
+        let mut provider = SourceProvider::new(48_000, 2);
+        provider.set_current(current);
+        provider.queue_next(next);
+
+        provider.clear_next();
+
+        assert!(!provider.has_next());
+        assert_eq!(
+            provider.current().unwrap().info.path,
+            PathBuf::from("cur.flac")
+        );
+    }
+}

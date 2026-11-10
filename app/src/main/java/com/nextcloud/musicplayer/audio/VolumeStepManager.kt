@@ -19,18 +19,24 @@ class VolumeStepManager(
         private set
 
     fun onEnterForeground(totalSteps: Int): Int {
-        val steps = totalSteps.coerceAtLeast(1)
+        if (totalSteps <= 0) {
+            currentTotalSteps = totalSteps
+            currentStep = 0
+            // The playback service owns gain transitions; UI restoration only restores its state.
+            return currentStep
+        }
+        val steps = totalSteps
         val fraction = PlaybackVolume.readFraction(context)
         currentTotalSteps = steps
         currentStep = (fraction * steps).roundToInt().coerceIn(0, steps)
-        playerController.setVolume(PlaybackVolume.fractionToGain(fraction))
         return currentStep
     }
 
     fun onEnterBackground() = Unit
 
     fun setStep(step: Int, totalSteps: Int) {
-        val steps = totalSteps.coerceAtLeast(1)
+        if (totalSteps <= 0) return
+        val steps = totalSteps
         currentStep = step.coerceIn(0, steps)
         currentTotalSteps = steps
         val fraction = currentStep.toFloat() / steps
@@ -39,12 +45,14 @@ class VolumeStepManager(
     }
 
     fun stepUp(totalSteps: Int): Int {
+        if (totalSteps <= 0) return currentStep
         val next = (currentStep + 1).coerceAtMost(totalSteps.coerceAtLeast(1))
         setStep(next, totalSteps)
         return next
     }
 
     fun stepDown(totalSteps: Int): Int {
+        if (totalSteps <= 0) return currentStep
         val previous = (currentStep - 1).coerceAtLeast(0)
         setStep(previous, totalSteps)
         return previous

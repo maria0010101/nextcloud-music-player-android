@@ -11,6 +11,11 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.ForwardingPlayer
+import com.nextcloud.musicplayer.core.settings.AudioPlaybackSettings
+import com.nextcloud.musicplayer.core.settings.AppSettingsDataStore
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaSession
@@ -33,7 +38,14 @@ class MusicPlaybackService : MediaSessionService() {
 
     private val TAG = "MusicPlaybackService"
     private var mediaSession: MediaSession? = null
-    private lateinit var player: ExoPlayer
+    private lateinit var player: Player
+    private lateinit var systemPlayer: ExoPlayer
+    private lateinit var guardedSystemPlayer: Player
+    private var flickPlayer: FlickPlayer? = null
+    private var guardedFlickPlayer: Player? = null
+    private var sourceServer: FlickDataSourceServer? = null
+    private var policy = AudioPlaybackSettings(AppSettingsDataStore.AUDIO_ENGINE_SYSTEM, 0)
+    private var effectSession = 0
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     @OptIn(UnstableApi::class)
@@ -48,26 +60,27 @@ class MusicPlaybackService : MediaSessionService() {
             .setUsage(C.USAGE_MEDIA)
             .build()
 
-        player = ExoPlayer.Builder(this)
+        policy = runBlocking(Dispatchers.IO) { app.appSettingsDataStore.playbackSettings.first() }
+        systemPlayer = ExoPlayer.Builder(this)
             .setMediaSourceFactory(cacheManager.createMediaSourceFactory())
             .setAudioAttributes(audioAttributes, true) // 自動管理 Audio Focus (暫停/淡出)
             .setHandleAudioBecomingNoisy(true)        // 拔耳機自動暫停
             .setWakeMode(C.WAKE_MODE_NETWORK)         // 串流播放時維持 CPU 喚醒
             .build()
 
-        // Apply saved app gain before the service can begin playback, including process restarts.
-        player.volume = PlaybackVolume.readGain(this)
-
-        if (player.audioSessionId > 0) {
-            AudioEffectManager.getInstance(applicationContext).attachSession(player.audioSessionId)
+        guardedSystemPlayer = object : ForwardingPlayer(systemPlayer) {
+            override fun setVolume(volume: Float) {
+                super.setVolume(if (policy.usesAppVolume) volume.coerceIn(0f, 1f) else 1f)
+            }
         }
+        player = if (policy.isFlick) getFlickPlayer() else guardedSystemPlayer
+        player.volume = policy.effectiveGain(PlaybackVolume.readGain(this))
+        updateSystemEffects()
 
-        player.addListener(object : Player.Listener {
+        systemPlayer.addListener(object : Player.Listener {
             override fun onAudioSessionIdChanged(audioSessionId: Int) {
                 Log.d(TAG, "ExoPlayer onAudioSessionIdChanged: audioSessionId=$audioSessionId")
-                if (audioSessionId > 0) {
-                    AudioEffectManager.getInstance(applicationContext).attachSession(audioSessionId)
-                }
+                if (player === guardedSystemPlayer) updateSystemEffects()
             }
 
             override fun onVolumeChanged(volume: Float) {
@@ -128,6 +141,81 @@ class MusicPlaybackService : MediaSessionService() {
             .setCallback(MediaSessionCallback())
             .setBitmapLoader(CoilBitmapLoader(this))
             .build()
+
+        serviceScope.launch {
+            app.appSettingsDataStore.playbackSettings.collect { settings -> applySettings(settings) }
+        }
+    }
+
+    @OptIn(UnstableApi::class)
+    private fun getFlickPlayer(): Player {
+        return guardedFlickPlayer ?: run {
+            val app = application as NextcloudMusicApp
+            val server = FlickDataSourceServer(app.playbackCacheManager.cacheDataSourceFactory)
+            sourceServer = server
+            val backend = FlickPlayer(
+                context = this,
+                strict = policy.isBitPerfect,
+                initialGain = policy.effectiveGain(PlaybackVolume.readGain(this)),
+                headers = { emptyMap() },
+                resolveUri = { server.resolve(it) },
+                onNativeReleased = { server.close() }
+            ).also { flickPlayer = it }
+            object : ForwardingPlayer(backend) {
+                override fun setVolume(volume: Float) {
+                    if (!policy.isBitPerfect) super.setVolume(if (policy.usesAppVolume) volume.coerceIn(0f, 1f) else 1f)
+                }
+            }.also { guardedFlickPlayer = it }
+        }
+    }
+
+    @OptIn(UnstableApi::class)
+    private fun applySettings(settings: AudioPlaybackSettings) {
+        val previous = policy
+        if (previous.volumeSteps != settings.volumeSteps &&
+            (previous.isBitPerfect || settings.isBitPerfect || (previous.usesAppVolume && !settings.usesAppVolume))) {
+            player.pause()
+        }
+        policy = settings
+        val gain = settings.effectiveGain(PlaybackVolume.readGain(this))
+        if (previous.audioEngine != settings.audioEngine) {
+            val old = player
+            val items = (0 until old.mediaItemCount).map { old.getMediaItemAt(it) }
+            val index = old.currentMediaItemIndex.coerceAtLeast(0)
+            val position = old.currentPosition.coerceAtLeast(0)
+            val repeat = old.repeatMode
+            val shuffle = old.shuffleModeEnabled
+            old.pause()
+            old.stop()
+            player = if (settings.isFlick) getFlickPlayer() else guardedSystemPlayer
+            flickPlayer?.updateVolumeMode(settings.isBitPerfect, gain)
+            player.volume = gain
+            player.repeatMode = repeat
+            player.shuffleModeEnabled = shuffle
+            if (items.isNotEmpty()) {
+                player.setMediaItems(items, index.coerceAtMost(items.lastIndex), position)
+                // Changing engines remains paused: do not start a new output at unity gain.
+                player.playWhenReady = false
+                player.prepare()
+            }
+            mediaSession?.setPlayer(player)
+        } else {
+            flickPlayer?.updateVolumeMode(settings.isBitPerfect, gain)
+            player.volume = gain
+        }
+        updateSystemEffects()
+    }
+
+    private fun updateSystemEffects() {
+        val effects = AudioEffectManager.getInstance(applicationContext)
+        if (effectSession > 0 && (player !== guardedSystemPlayer || effectSession != systemPlayer.audioSessionId)) {
+            effects.detachSession(effectSession)
+            effectSession = 0
+        }
+        if (player === guardedSystemPlayer && systemPlayer.audioSessionId > 0 && effectSession != systemPlayer.audioSessionId) {
+            effectSession = systemPlayer.audioSessionId
+            effects.attachSession(effectSession)
+        }
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? {
@@ -143,18 +231,15 @@ class MusicPlaybackService : MediaSessionService() {
 
     override fun onDestroy() {
         serviceScope.cancel()
-        try {
-            if (::player.isInitialized && player.audioSessionId > 0) {
-                AudioEffectManager.getInstance(applicationContext).detachSession(player.audioSessionId)
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "AudioEffectManager detachSession 失敗", e)
+        if (effectSession > 0) {
+            AudioEffectManager.getInstance(applicationContext).detachSession(effectSession)
+            effectSession = 0
         }
-        mediaSession?.run {
-            player.release()
-            release()
-            mediaSession = null
-        }
+        mediaSession?.release()
+        mediaSession = null
+        if (::systemPlayer.isInitialized) systemPlayer.release()
+        flickPlayer?.release() // The loopback server closes after serialized native teardown.
+        if (flickPlayer == null) sourceServer?.close()
         super.onDestroy()
     }
 
