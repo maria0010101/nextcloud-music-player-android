@@ -5,8 +5,8 @@ import kotlin.math.pow
 
 /** Persist the app's own volume independently of the Android media stream. */
 object PlaybackVolume {
-    private const val PREFS_NAME = "playback_volume"
-    private const val KEY_FRACTION = "fraction"
+    const val PREFS_NAME = "playback_volume"
+    const val KEY_FRACTION = "fraction"
 
     fun readFraction(context: Context): Float =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)

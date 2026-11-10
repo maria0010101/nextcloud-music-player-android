@@ -15,15 +15,18 @@ Volume precision modes are:
 
 - 關閉音量調節精度: app gain is unity and physical volume keys use Android's
   media volume. Old 15- and 30-step preferences normalize to this mode.
-- 25 / 50 / 100 steps: the app's existing perceptual gain is used by either
-  backend. The Rust boundary accepts the final linear gain, not a second curve.
+- 25 / 50 / 100 steps: service-owned dynamic system-volume mapping for either
+  backend. Each requested fraction maps to a neighboring Android media index;
+  only the residual dB difference is applied inside the player. See
+  `DYNAMIC_VOLUME_2026-11-10.md` for rounding, route, and test details.
 - bit-perfect: only available with Flick. App gain is unity, DSP is bypassed,
   physical volume keys are consumed while the Activity is foreground, and audio
   uses an authorized compatible USB DAC directly rather than Android's mixer.
   Control the external device appropriately. The app does not globally disable
   Android system UI volume controls or raise the global stream volume.
 
-The original fine-volume fraction is retained across modes. Leaving strict mode
+Fine mode activation starts at the current system level; Activity lifecycle
+changes retain the exact fraction and residual gain. Leaving strict mode
 or moving fine volume to unity pauses first. Standard Android effects remain
 saved but are not applied/edited while Flick is selected. Rust DSP controls beyond
 gain are not exposed in this integration.

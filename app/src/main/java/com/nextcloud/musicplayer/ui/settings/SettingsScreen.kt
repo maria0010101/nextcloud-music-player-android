@@ -573,7 +573,7 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text("關閉時使用系統音量；高精度模式只調整 App 音量，不改動系統音量。", style = MaterialTheme.typography.labelMedium)
+                    Text("關閉時使用系統音量；高精度模式同步系統音量，播放器僅補償相鄰階數的差距，前景與背景維持相同輸出。", style = MaterialTheme.typography.labelMedium)
                     Spacer(modifier = Modifier.height(8.dp))
 
                     val volumeOptions = listOf(

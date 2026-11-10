@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -64,7 +65,7 @@ class PlayerViewModel(
 
     init {
         viewModelScope.launch {
-            playbackSettings.collect { policy ->
+            playbackSettings.combine(volumeStepManager.fractions) { policy, _ -> policy }.collect { policy ->
                 val steps = policy.volumeSteps
                 if (!policy.usesAppVolume) dismissVolumeHud()
                 val step = volumeStepManager.onEnterForeground(steps)

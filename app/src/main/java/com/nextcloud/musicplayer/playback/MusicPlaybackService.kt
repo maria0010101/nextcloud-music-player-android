@@ -26,6 +26,7 @@ import com.nextcloud.musicplayer.MainActivity
 import com.nextcloud.musicplayer.NextcloudMusicApp
 import com.nextcloud.musicplayer.audio.AudioEffectManager
 import com.nextcloud.musicplayer.audio.PlaybackVolume
+import com.nextcloud.musicplayer.audio.DynamicVolume
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -46,6 +47,13 @@ class MusicPlaybackService : MediaSessionService() {
     private var sourceServer: FlickDataSourceServer? = null
     private var policy = AudioPlaybackSettings(AppSettingsDataStore.AUDIO_ENGINE_SYSTEM, 0)
     private var effectSession = 0
+    private lateinit var dynamicVolume: DynamicVolume
+    private var mappedGain = 1f
+
+    private fun applyDynamicVolume() {
+        mappedGain = dynamicVolume.gainFor(policy)
+        player.volume = mappedGain
+    }
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     @OptIn(UnstableApi::class)
@@ -61,6 +69,8 @@ class MusicPlaybackService : MediaSessionService() {
             .build()
 
         policy = runBlocking(Dispatchers.IO) { app.appSettingsDataStore.playbackSettings.first() }
+        dynamicVolume = DynamicVolume(this, ::applyDynamicVolume)
+        mappedGain = dynamicVolume.gainFor(policy)
         systemPlayer = ExoPlayer.Builder(this)
             .setMediaSourceFactory(cacheManager.createMediaSourceFactory())
             .setAudioAttributes(audioAttributes, true) // 自動管理 Audio Focus (暫停/淡出)
@@ -74,8 +84,9 @@ class MusicPlaybackService : MediaSessionService() {
             }
         }
         player = if (policy.isFlick) getFlickPlayer() else guardedSystemPlayer
-        player.volume = policy.effectiveGain(PlaybackVolume.readGain(this))
+        player.volume = mappedGain
         updateSystemEffects()
+        dynamicVolume.start()
 
         systemPlayer.addListener(object : Player.Listener {
             override fun onAudioSessionIdChanged(audioSessionId: Int) {
@@ -156,7 +167,7 @@ class MusicPlaybackService : MediaSessionService() {
             val backend = FlickPlayer(
                 context = this,
                 strict = policy.isBitPerfect,
-                initialGain = policy.effectiveGain(PlaybackVolume.readGain(this)),
+                initialGain = mappedGain,
                 headers = { emptyMap() },
                 resolveUri = { server.resolve(it) },
                 onNativeReleased = { server.close() }
@@ -177,7 +188,8 @@ class MusicPlaybackService : MediaSessionService() {
             player.pause()
         }
         policy = settings
-        val gain = settings.effectiveGain(PlaybackVolume.readGain(this))
+        val gain = dynamicVolume.gainFor(settings)
+        mappedGain = gain
         if (previous.audioEngine != settings.audioEngine) {
             val old = player
             val items = (0 until old.mediaItemCount).map { old.getMediaItemAt(it) }
@@ -231,6 +243,7 @@ class MusicPlaybackService : MediaSessionService() {
 
     override fun onDestroy() {
         serviceScope.cancel()
+        if (::dynamicVolume.isInitialized) dynamicVolume.close()
         if (effectSession > 0) {
             AudioEffectManager.getInstance(applicationContext).detachSession(effectSession)
             effectSession = 0

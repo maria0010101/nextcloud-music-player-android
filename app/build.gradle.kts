@@ -12,8 +12,8 @@ android {
         applicationId = "com.nextcloud.musicplayer"
         minSdk = 26
         targetSdk = 36
-        versionCode = 14
-        versionName = "0.9.0-flick-dev"
+        versionCode = 15
+        versionName = "0.9.1-flick-dev"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

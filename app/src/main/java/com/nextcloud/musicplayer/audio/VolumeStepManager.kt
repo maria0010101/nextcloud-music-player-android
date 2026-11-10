@@ -3,15 +3,28 @@ package com.nextcloud.musicplayer.audio
 import android.content.Context
 import com.nextcloud.musicplayer.playback.PlayerController
 import kotlin.math.roundToInt
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.callbackFlow
+import android.content.SharedPreferences
 
 /**
- * App-local volume steps. Android's output volume remains the user's device setting;
- * neither lifecycle changes nor fine steps write to the global music stream.
+ * Persists the requested fine step. The playback service owns system mapping and gain;
+ * Activity lifecycle transitions never change either volume.
  */
 class VolumeStepManager(
     private val context: Context,
     private val playerController: PlayerController
 ) {
+    val fractions = callbackFlow {
+        val prefs = context.getSharedPreferences(PlaybackVolume.PREFS_NAME, Context.MODE_PRIVATE)
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == PlaybackVolume.KEY_FRACTION) trySend(PlaybackVolume.readFraction(context))
+        }
+        prefs.registerOnSharedPreferenceChangeListener(listener)
+        trySend(PlaybackVolume.readFraction(context))
+        awaitClose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
+
     var currentStep: Int = 0
         private set
 
@@ -41,11 +54,12 @@ class VolumeStepManager(
         currentTotalSteps = steps
         val fraction = currentStep.toFloat() / steps
         PlaybackVolume.saveFraction(context, fraction)
-        playerController.setVolume(PlaybackVolume.fractionToGain(fraction))
+        // SharedPreferences listener in the playback service applies the request, even in background.
     }
 
     fun stepUp(totalSteps: Int): Int {
         if (totalSteps <= 0) return currentStep
+        onEnterForeground(totalSteps)
         val next = (currentStep + 1).coerceAtMost(totalSteps.coerceAtLeast(1))
         setStep(next, totalSteps)
         return next
@@ -53,6 +67,7 @@ class VolumeStepManager(
 
     fun stepDown(totalSteps: Int): Int {
         if (totalSteps <= 0) return currentStep
+        onEnterForeground(totalSteps)
         val previous = (currentStep - 1).coerceAtLeast(0)
         setStep(previous, totalSteps)
         return previous

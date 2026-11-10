@@ -1,6 +1,6 @@
 package com.nextcloud.musicplayer.core.settings
 
-/** Atomic playback policy, shared by the service and UI. Never changes the system volume. */
+/** Atomic playback policy, shared by the service and UI. Fine volume is mapped by the playback service. */
 data class AudioPlaybackSettings(
     val audioEngine: String = ENGINE_SYSTEM,
     val volumeSteps: Int = VOLUME_SYSTEM

@@ -194,13 +194,15 @@ class FlickPlaybackTest {
             val fineBefore = com.nextcloud.musicplayer.audio.PlaybackVolume.readFraction(context)
             val fineKey = if (fineBefore >= 1f) android.view.KeyEvent.KEYCODE_VOLUME_DOWN else android.view.KeyEvent.KEYCODE_VOLUME_UP
             instrumentation.sendKeyDownUpSync(fineKey)
-            assertEquals("fine must not change Android volume", originalSystem, audio.getStreamVolume(stream))
+            // Fine steps now dynamically map into Android media volume.
+            Thread.sleep(350)
             assertNotEquals("fine key changes app fraction", fineBefore, com.nextcloud.musicplayer.audio.PlaybackVolume.readFraction(context))
             choose(AppSettingsDataStore.AUDIO_ENGINE_FLICK, -1)
             val strictBefore = com.nextcloud.musicplayer.audio.PlaybackVolume.readFraction(context)
+            val strictSystem = audio.getStreamVolume(stream)
             instrumentation.sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_VOLUME_UP)
             instrumentation.sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_VOLUME_DOWN)
-            assertEquals("strict ignores system volume keys", originalSystem, audio.getStreamVolume(stream))
+            assertEquals("strict ignores system volume keys", strictSystem, audio.getStreamVolume(stream))
             assertEquals("strict ignores app volume keys", strictBefore, com.nextcloud.musicplayer.audio.PlaybackVolume.readFraction(context), 0f)
         } finally {
             com.nextcloud.musicplayer.audio.PlaybackVolume.saveFraction(context, fraction)
