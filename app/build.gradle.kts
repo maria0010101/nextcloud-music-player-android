@@ -14,6 +14,9 @@ android {
         targetSdk = 36
         versionCode = 16
         versionName = "0.9.1"
+        // Flick native core is currently built only for arm64. Do not advertise
+        // other ABIs merely because transitive AARs contain ancillary libraries.
+        ndk { abiFilters += "arm64-v8a" }
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
