@@ -18,9 +18,21 @@ Many private cloud music solutions require dedicated server-side extensions (suc
 
 **Nextcloud WebDAV Music Player** takes an elegant, server-agnostic approach:
 - **Direct WebDAV Interaction**: Utilizes native Nextcloud WebDAV endpoints (`PROPFIND`, HTTP range `GET`, `PUT`) for folder discovery, progressive streaming, and cover management.
-- **Client-Side Decoding**: Powered by AndroidX Media3 (ExoPlayer), decoding FLAC, MP3, AAC, OGG, WAV, ALAC, and Opus right on your phone.
+- **Client-Side Decoding**: Select AndroidX Media3 (ExoPlayer) or the integrated Flick Rust engine, decoding FLAC, MP3, AAC, OGG, WAV, ALAC, and Opus right on your phone.
 - **Smart Metadata & Image Resolution**: Dynamically discovers album structures and cover art without requiring server modifications.
 - **Low Overhead**: Enjoy your private lossless music collection anywhere without heating up your home server or NAS.
+
+---
+
+## 🚀 What's New in v0.9.1
+
+- **Selectable playback engines**: Keep AndroidX Media3 / ExoPlayer or select the integrated [Flick Rust audio engine](https://github.com/moss-apps/Flick) in Settings. Both use the existing Nextcloud authentication, shared cache, queue and media controls.
+- **PCM conversion fixes**: Correct power-of-two normalization, rounding and saturation for PCM16/24. Strict playback rejects PCM32 and unknown precision rather than claiming bit-exact output through float32.
+- **Dynamic volume precision**: Choose 25 / 50 / 100 steps. The playback service maps the selected fraction to Android media volume and applies only the residual dB attenuation inside the player. Foreground/background transitions do not reset either setting. Because Media3 cannot amplify above unity, mapping uses the adjacent upper system step rather than rounding down and boosting PCM. Background system controls retain Android's integer step size.
+- **System-volume and bit-perfect modes**: The former 15-step setting is now “關閉音量調節精度” (system volume); 30 steps is removed. Flick-only bit-perfect bypasses app gain and DSP and requires a compatible authorized USB DAC. Unsupported sources or outputs fail visibly, without speaker fallback.
+- **Updated launcher icon** and preserved Room schema v6, account, favorites and playlists.
+
+The current native build targets **arm64-v8a**. Software and phone tests do not prove USB DAC bit-exact output; DAC, Bluetooth and multi-output hardware validation remain outstanding. See [Flick integration](docs/FLICK_AUDIO.md) and [dynamic volume implementation and tests](docs/DYNAMIC_VOLUME_2026-11-10.md).
 
 ---
 
@@ -316,7 +328,7 @@ Ensures artwork is always displayed using a 4-tier resolution pipeline:
 |---|---|
 | **UI & Presentation** | Jetpack Compose, Material 3, Material 3 WindowSizeClass, Navigation Compose |
 | **Architecture Pattern** | MVVM + Clean Architecture, Kotlin Coroutines, StateFlow / SharedFlow |
-| **Audio Engine** | AndroidX Media3 (ExoPlayer), MediaSessionService, MediaNotificationManager |
+| **Audio Engine** | AndroidX Media3 (ExoPlayer) or Flick Rust (JNI, native Android output / strict USB UAC2), MediaSessionService |
 | **Networking & Protocols** | OkHttp 4, WebDAV (`PROPFIND`, `GET`, `PUT`, `HEAD`), Nextcloud Login Flow v2 |
 | **Local Persistence** | AndroidX Room (SQLite ORM) for library metadata & offline status; Jetpack DataStore |
 | **Storage & I/O** | Android Storage Access Framework (SAF), AndroidX DocumentFile, Scoped Storage |
@@ -330,13 +342,13 @@ Ensures artwork is always displayed using a 4-tier resolution pipeline:
 ## 🚀 Getting Started
 
 ### Prerequisites
-- An Android device running **Android 8.0 (Oreo / API Level 26)** or higher (fully tested on Android 14, 15, and 16).
+- An Android device running **Android 8.0 (Oreo / API Level 26)** or higher (the v0.9.1 Flick integration was device-tested on Android 14; other versions require validation).
 - A running **Nextcloud instance** (version 20+ recommended) with WebDAV access enabled.
 - A music folder stored on your Nextcloud instance (e.g., `Music/`).
 
 ### Download
 You can download the pre-compiled, signed APK directly from GitHub Releases:
-- 👉 **[Download NextcloudPlayer-v0.6.1.apk](https://github.com/maria0010101/nextcloud-music-player-android/releases/latest)**
+- 👉 **[Download the latest published APK](https://github.com/maria0010101/nextcloud-music-player-android/releases/latest)**
 
 ---
 
@@ -353,6 +365,11 @@ To compile and build the application yourself:
 2. **Environment Requirements**:
    - JDK 17 or higher
    - Android SDK (API 36 build tools)
+   - Android NDK **28.2.13676358** (or set `ANDROID_NDK_HOME` to a compatible installation)
+   - Rust stable and target `aarch64-linux-android` (`rustup target add aarch64-linux-android`)
+   - Clang / libclang for bindgen on the build host (the provided native script targets Linux x86_64)
+
+   Gradle builds the pinned Rust engine automatically before packaging. See [native build and relinking instructions](native/flick/README.md). The current build packages arm64-v8a only; other ABIs require additional native builds.
 
 3. **Build Debug APK**:
    ```bash
@@ -383,7 +400,7 @@ To compile and build the application yourself:
 
 ## 🗺️ Roadmap
 
-- [ ] Custom Playlist creation and management
+- [x] Custom Playlist creation and management
 - [ ] Synchronized Lyrics (`.lrc` files and embedded USLT tags)
 - [x] Built-in Equalizer (10-Band Graphic EQ), AutoEq headphone sound profiles, and Channel balance
 - [ ] Android Auto integration
@@ -396,6 +413,10 @@ To compile and build the application yourself:
 
 We extend our sincere gratitude to the following outstanding open-source projects and authors whose pioneering work made these audio capabilities possible:
 
+- **[moss-apps/Flick](https://github.com/moss-apps/Flick)** — Flick Player Contributors, **MIT**:
+  - Source of the integrated Rust decoding/playback engine and Android UAC2 USB transport, pinned to **0.23.1-beta.3**, commit [`f35d87980e8a8892764668966d49a11b2f10c00e`](https://github.com/moss-apps/Flick/tree/f35d87980e8a8892764668966d49a11b2f10c00e).
+  - This project adapts the engine through Kotlin/JNI, fixes PCM16/24 conversion, and integrates Nextcloud streaming/cache, engine selection and volume policies. It does not incorporate Flick's Flutter UI or imply upstream endorsement.
+  - Original copyright and license are retained in [native/flick/LICENSE](native/flick/LICENSE). See [integration changes](native/flick/README.md) and [third-party notices](native/flick/licenses/THIRD_PARTY_NOTICES.txt) for vendored components and dependency licenses, including LGPL libusb and MPL Symphonia. SoundTouch is excluded from this integration's build.
 - **[nulldio/32steps](https://github.com/nulldio/32steps)** by [@nulldio](https://github.com/nulldio):
   - Invaluable design and implementation reference for the interactive 10-band graphic equalizer response curve view (`GraphicEqView`), gesture ergonomics (direct drag & double-tap to zero), vertical gain bars, AutoEq integration architecture, and burst-free continuous volume step mapping (`VolumeStepManager`).
 - **[jaakkopasanen/AutoEq](https://github.com/jaakkopasanen/AutoEq)** by Jaakko Pasanen:
@@ -413,4 +434,4 @@ This is an independent open-source project created by community contributors. It
 
 ## 📄 License
 
-This project is open-source software licensed under the [MIT License](LICENSE).
+This project’s original application code is licensed under the [MIT License](LICENSE). Incorporated upstream code and dependencies retain their own licenses; the root MIT license does not replace those obligations. Flick attribution, third-party notices and rebuilding/relinking instructions are available under [native/flick](native/flick/README.md).
