@@ -1,6 +1,9 @@
 # 圖示滿版修正（2026-11-12）
 
-維持 0.9.1 / versionCode 16；這是本機修正版，未替換公開 GitHub Release。
+維持 0.9.1 / versionCode 16；用於同版本 Release 的圖示修正更新。
+APK 對應程式碼提交 `15e6d56a5e2f5670c70a2765b6088da2331a7483`；
+後續 README 與本紀錄修訂不更動產品來源。保留原始 `v0.9.1` tag，
+修正版來源請使用上述提交或 main，不以原始 tag 的 Source code 壓縮檔重建修正版。
 
 ## 原因與修正
 
